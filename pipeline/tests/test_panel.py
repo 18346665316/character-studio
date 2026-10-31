@@ -92,6 +92,10 @@ class PanelTests(unittest.TestCase):
         (captures/'walking_0.png').write_bytes(b'preview')
         self.panel.approve(dict(request,file='walking.fbx'))
         self.assertEqual(self.panel.validate_task('hero','bake',{'batch':'b1'})['batch'],'b1')
+        self.assertEqual(self.panel.validate_task('hero','bake',{'batch':'b1'})['renderer'],'godot')
+        self.assertEqual(self.panel.validate_task('hero','bake',{'batch':'b1','renderer':'blender'})['renderer'],'blender')
+        with self.assertRaisesRegex(ValueError,'未知渲染'):
+            self.panel.validate_task('hero','bake',{'batch':'b1','renderer':'other'})
         atomic(receipt,{'character':'hero','batch':'b1','files':{'idle.fbx':'changed','walking.fbx':'walk-hash'}})
         with self.assertRaisesRegex(ValueError,'已变化'):
             self.panel.approve(dict(request,file='idle.fbx'))

@@ -46,7 +46,7 @@ def execute(job, persist):
     elif action == 'rig':
         studio.rig(character)
     elif action == 'download':
-        binding = require_ready(character, studio.model_path(character))
+        binding = require_ready(character, studio.model_path(character),allow_cloud_recovery=True)
         batch = outputs.setdefault('batch', studio.new_batch())
         persist()
         target = ws / 'animations' / batch
@@ -99,9 +99,12 @@ def execute(job, persist):
     elif action == 'review':
         from review_character import review
         outputs['review'] = str(review(character, params['batch'], capture_only=True).relative_to(studio.BASE_DIR))
+    elif action == 'sequence':
+        from sequence_render import render
+        outputs['sequence_preview']=render(studio.BASE_DIR,character,params['plan'])
     elif action == 'bake':
         # studio.bake publishes and records its destination only after the full batch passes.
-        studio.bake(character, params['batch'], params['view'], params['frame_size'], params['supersample'], params.get('equipment_id'))
+        studio.bake(character, params['batch'], params['view'], params['frame_size'], params['supersample'], params.get('equipment_id'), params.get('renderer','godot'), params.get('equipment_usage_sha256'))
         from progress import read
         outputs['delivery'] = read(character)['output']
     else:
@@ -127,7 +130,7 @@ def main():
     except BaseException as exc:
         traceback.print_exc()
         job.update(status='failed', error=str(exc), finished_at=stamp())
-        failure_stage={'reconstruct':'reconstruction','prepare':'prepare','rig':'rig','download':'download','review':'review','equipment':'equipment','bake':'render','weapon':'weapon'}.get(job['action'],'validate')
+        failure_stage={'reconstruct':'reconstruction','prepare':'prepare','rig':'rig','download':'download','review':'review','equipment':'equipment','bake':'render','sequence':'render','weapon':'weapon'}.get(job['action'],'validate')
         studio.progress_update(job['character'], failure_stage, str(exc), status='failed')
     finally:
         save(path, job)

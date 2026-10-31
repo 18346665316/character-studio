@@ -103,6 +103,12 @@ def edit(character,batch,equipment_id=None,weapon_id=None):
     result=validate(json.loads(output.read_text()))
     if any(result.get(k)!=config.get(k) for k in ('character','batch','files','rig_sha256','schema','weapon','weapon_asset','weapon_model_sha256','weapon_length','weapon_points')):
         raise ValueError('标注期间来源版本发生变化')
+    if equipment_id:
+        from equipment_usage import load as load_usage
+        from weapon_assets import digest
+        usage=load_usage(root,character,equipment_id)
+        usage['equipment_sha256']=digest(output)
+        (directory/'usage.json').write_text(json.dumps(usage,ensure_ascii=False,indent=2)+'\n')
     studio.progress_update(character,'review','装备标注已确认并保存，可选择该配置烘焙图集',status='waiting',batch=batch,output=str(directory))
     return directory
 

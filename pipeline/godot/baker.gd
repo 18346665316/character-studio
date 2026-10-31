@@ -90,6 +90,9 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
         push_error("No AnimationPlayer: " + path)
         viewport.queue_free()
         return false
+    var equipment_helper
+    var equipment_mounts := {}
+    var usage := {}
     if FileAccess.file_exists("res://equipment.json"):
         var config: Dictionary=JSON.parse_string(FileAccess.get_file_as_string("res://equipment.json"))
         var nodes: Array[Node]=[character]
@@ -102,8 +105,14 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
             push_error("Missing equipment hand bone")
             viewport.queue_free()
             return false
-        var helper = load("res://equipment_runtime.gd")
-        if helper.attach(skeleton,config) == null:
+        equipment_helper = load("res://equipment_runtime.gd")
+        if FileAccess.file_exists("res://equipment_usage.json"):
+            usage = JSON.parse_string(FileAccess.get_file_as_string("res://equipment_usage.json"))
+            equipment_mounts = equipment_helper.usage_setup(skeleton, config, usage)
+        else:
+            var attachment = equipment_helper.attach(skeleton,config)
+            if attachment != null: equipment_mounts.hand = attachment
+        if equipment_mounts.is_empty():
             push_error("Could not load equipment weapon")
             viewport.queue_free()
             return false
@@ -148,12 +157,13 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     # Use deformed geometry across the sampled clip to keep one stable framing.
     for sample in range(frame_count):
         player.seek(float(sample) / frame_count * length, true)
+        if not usage.is_empty(): equipment_helper.usage_apply(equipment_mounts,usage,asset_name,float(sample)/frame_count)
         await get_tree().process_frame
         await RenderingServer.frame_post_draw
         var meshes: Array[Node] = [character]
         while not meshes.is_empty():
             var item: Node = meshes.pop_back()
-            if item is MeshInstance3D and item.mesh != null:
+            if item is MeshInstance3D and item.mesh != null and item.is_visible_in_tree():
                 var posed: ArrayMesh = item.bake_mesh_from_current_skeleton_pose() if item.skin != null else null
                 var local_bounds: AABB = posed.get_aabb() if posed != null else item.get_aabb()
                 # Project each posed box before merging: camera depth must not set sprite scale.
@@ -192,6 +202,7 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     var sheet := Image.create(frame_size * frame_count, frame_size, false, Image.FORMAT_RGBA8)
     for i in range(frame_count):
         player.seek(float(i) / frame_count * length, true)
+        if not usage.is_empty(): equipment_helper.usage_apply(equipment_mounts,usage,asset_name,float(i)/frame_count)
         await get_tree().process_frame
         await RenderingServer.frame_post_draw
         var frame := viewport.get_texture().get_image()
@@ -208,6 +219,7 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
         return false
     metadata.store_string(JSON.stringify({"duration_seconds": length, "frame_count": frame_count,
         "fps": float(frame_count) / length, "clip": selected, "view": view,
+        "camera": {"size": camera.size, "center": [center.x,center.y,center.z], "view": view},
         "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, "  "))
     metadata.close()
     if error != OK:

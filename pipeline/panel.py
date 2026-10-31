@@ -20,9 +20,9 @@ from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon'}
+ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建'}
+          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染'}
 
 
 def now():
@@ -163,7 +163,9 @@ class Panel:
                 break
         state = read(self.root / '.local/mixamo' / character / 'state.json', {'status':'unbound'})
         rig_ready = False
-        if prepared and state.get('status') == 'ready' and state.get('human_reviewed'):
+        from mixamo_state import cloud_recoverable
+        recovery_available=cloud_recoverable(state)
+        if prepared and (state.get('status') == 'ready' or recovery_available) and state.get('human_reviewed'):
             try:
                 bound = self.scoped(str(Path(state['bound_model']).relative_to(self.root)), f'workspaces/{character}/rig')
                 upload = ws / 'models/prepared' / prepared['id'] / 'mixamo.zip'
@@ -173,7 +175,7 @@ class Panel:
         batches = []
         for receipt in files('animations/*/batch.json'):
             info = read(receipt, {})
-            if info.get('character') != character or info.get('batch') != receipt.parent.name:
+            if info.get('kind')=='sequence' or info.get('character') != character or info.get('batch') != receipt.parent.name:
                 continue
             request=read(receipt.parent/'request.json',{})
             titles={a.lower().replace(' ','_')+'.fbx':a for a in request.get('names',[]) if isinstance(a,str)}
@@ -197,6 +199,7 @@ class Panel:
             if info.get('source', {}).get('character') != character:
                 continue
             deliveries.append({'id':manifest.parent.name, 'batch':info.get('source', {}).get('batch'),
+                               'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
                                'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
                                'clips':[{'name':p.stem.replace('_preview',''), 'gif':self.asset(p),
                                          'sheet':self.asset(p.with_name(p.name.replace('_preview.gif','_spritesheet.png'))),
@@ -218,15 +221,20 @@ class Panel:
                     compatible.append(batch['id'])
                 except (ValueError,OSError,TypeError,KeyError):
                     continue
-            equipment.append({'id':config_path.parent.name, 'batch':config['batch'], 'compatible_batches':compatible, 'bone':config['bone'],
+            from equipment_usage import load as load_usage
+            try: usage=load_usage(self.root,character,config_path.parent.name)
+            except (ValueError,OSError,TypeError,KeyError): usage=None
+            equipment.append({'usage':usage,'id':config_path.parent.name, 'batch':config['batch'], 'compatible_batches':compatible, 'bone':config['bone'],
                               'weapon':config['weapon'], 'weapon_name':config.get('weapon_name','标准单手剑'), 'scale':config['weapon_scale'],
                               'config':self.asset(config_path), 'preview':self.asset(config_path.parent/'review.png')})
         approvals = read(ws / 'panel_approvals.json', {})
         model_ok = bool(prepared and approvals.get('model', {}).get('fingerprint') == prepared['fingerprint'])
         profile=read(ws/'character.json',{})
         return {'id':character, 'display_name':profile.get('display_name',character), 'inputs':inputs, 'has_model':model.is_file(), 'prepared':prepared,
-                'rig':{'status':state.get('status'), 'ready':bool(rig_ready), 'error':state.get('error')}, 'batches':batches,
-                'equipment':equipment, 'reviews':reviews[:12], 'deliveries':deliveries[:12], 'approvals':approvals,
+                'rig':{'status':state.get('status'), 'ready':bool(rig_ready), 'recovery_available':bool(rig_ready and recovery_available), 'error':state.get('error')}, 'batches':batches,
+                'equipment':equipment, 'reviews':reviews[:12], 'deliveries':deliveries, 'approvals':approvals,
+                'sequence_preview':read(self.scoped(f'workspaces/{character}/sequence_preview.json',f'workspaces/{character}'),None),
+                'sequence':read(self.scoped(f'workspaces/{character}/sequence.json',f'workspaces/{character}'), None),
                 'model_approved':model_ok,
                 'progress':read(self.root / '.local/progress' / (character+'.json'))}
 
@@ -295,6 +303,12 @@ class Panel:
         if action not in ACTIONS or not isinstance(params, dict):
             raise ValueError('不支持的操作')
         clean = {}
+        if action == 'sequence':
+            from sequence_render import make_plan
+            plan=make_plan(self,character,params.get('recipe',{}))
+            if params.get('plan') and params['plan']!=plan:
+                raise ValueError('编排来源或武器设置已变化，请新建预览任务')
+            clean={'recipe':plan['recipe'],'plan':plan}
         if action == 'weapon':
             path=self.scoped(params.get('image'),'.local/weapon-inputs')
             if not path.is_file() or path.name!='original.png': raise ValueError('请先导入武器原画')
@@ -353,6 +367,14 @@ class Panel:
                     from equipment import load as load_equipment
                     clean['equipment_id'] = name(params['equipment_id'])
                     load_equipment(self.root, character, batch, clean['equipment_id'])
+                    from equipment_usage import load as load_usage, fingerprint
+                    pin=fingerprint(load_usage(self.root,character,clean['equipment_id']))
+                    if params.get('equipment_usage_sha256') and params['equipment_usage_sha256']!=pin:
+                        raise ValueError('武器持用设置已变化，请创建新的导出任务')
+                    clean['equipment_usage_sha256']=pin
+                clean['renderer'] = params.get('renderer','godot')
+                if clean['renderer'] not in ('godot','blender'):
+                    raise ValueError('未知渲染后端')
                 clean['view'] = params.get('view', 'three_quarter')
                 clean['frame_size'] = params.get('frame_size', 64)
                 clean['supersample'] = params.get('supersample', 4)
@@ -438,6 +460,36 @@ class Panel:
             atomic(path,record)
             return {'ok':True}
 
+    def save_sequence(self, data):
+        character = name(data.get('character'))
+        c = self.character(character)
+        title, loop, segments = data.get('title'), data.get('loop'), data.get('segments')
+        if not isinstance(title,str) or not 1 <= len(title.strip()) <= 60 or type(loop) is not bool:
+            raise ValueError('编排名称需为 1–60 字，循环需为布尔值')
+        if not isinstance(segments,list) or len(segments)>64:
+            raise ValueError('编排最多包含 64 个片段')
+        available={(d['id'],clip['name']):clip for d in c['deliveries'] for clip in d['clips'] if clip['sheet']}
+        clean=[]
+        for segment in segments:
+            if not isinstance(segment,dict):
+                raise ValueError('无效的编排片段')
+            delivery, clip = segment.get('delivery'), segment.get('clip')
+            repeat, speed = segment.get('repeat'), segment.get('speed')
+            if not isinstance(delivery,str) or not isinstance(clip,str) or (delivery,clip) not in available:
+                raise ValueError('编排引用的动画图集不存在或不属于此人物')
+            if type(repeat) is not int or not 1<=repeat<=20 or type(speed) not in (int,float) or not .25<=speed<=4:
+                raise ValueError('重复次数限 1–20，片段速度限 0.25–4')
+            info=available[(delivery,clip)]['info']
+            if not all(isinstance(info.get(k),(int,float)) and info[k]>0 for k in ('frame_count','frame_width','frame_height')):
+                raise ValueError('图集缺少有效帧信息，请重新渲染')
+            clean.append({'delivery':delivery,'clip':clip,'repeat':repeat,'speed':speed})
+        record={'title':title.strip(),'loop':loop,'segments':clean}
+        if data.get('renderSettings') is not None:
+            from sequence_render import settings
+            record['renderSettings']=settings(data['renderSettings'])
+        atomic(self.scoped(f'workspaces/{character}/sequence.json',f'workspaces/{character}'),record)
+        return {'ok':True,'sequence':record}
+
     def export(self, character, delivery):
         character, delivery = name(character), name(delivery)
         directory = self.scoped(f'deliverables/{character}/{delivery}', f'deliverables/{character}')
@@ -489,12 +541,12 @@ def handler(panel):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             try:
-                if parsed.path in ('/','/app.js','/style.css'):
+                if parsed.path in ('/','/app.js','/sequence.js','/style.css'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':5,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':10,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
@@ -547,6 +599,13 @@ def handler(panel):
                             raise ValueError('请等待当前任务完成后再确认武器')
                         from weapon_assets import calibrate
                         result=calibrate(panel.root,name(data.get('weapon')),data.get('length'),data.get('grip'))
+                    elif route == '/api/equipment/usage':
+                        if any(j['status'] in ('queued','running') for j in panel.jobs()):
+                            raise ValueError('请等待当前任务完成后再保存持用设置')
+                        from equipment_usage import save as save_usage
+                        result=save_usage(panel.root,name(data.get('character')),name(data.get('equipment')),data.get('default'),data.get('mounts'),data.get('batch'),data.get('file'),data.get('action'))
+                    elif route == '/api/sequence':
+                        result = panel.save_sequence(data)
                     elif route == '/api/tasks':
                         result = panel.start(data)
                     elif route == '/api/approve':

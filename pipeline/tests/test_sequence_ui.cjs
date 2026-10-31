@@ -1,0 +1,27 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const elements=new Map(),ctx=vm.createContext({document:{getElementById(id){if(!elements.has(id))elements.set(id,{setAttribute(){}});return elements.get(id);},querySelectorAll(){return[];}},localStorage:{getItem(){return null;}},performance:{now(){return 0;}},requestAnimationFrame(){return 1;},cancelAnimationFrame(){}});
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../panel_ui/sequence.js'),'utf8'),ctx);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../panel_ui/app.js'),'utf8').replace('refresh(true);setInterval(()=>refresh(),2500);',''),ctx);
+vm.runInContext(`
+const options=[{id:'d/a',title:'A',item:{sheet:'a',info:{frame_count:4,frame_width:16,frame_height:16,fps:4}}},{id:'d/b',title:'B',item:{sheet:'b',info:{frame_count:6,frame_width:16,frame_height:16,fps:3}}}];
+const segments=[{delivery:'d',clip:'a',repeat:2,speed:2},{delivery:'d',clip:'b',repeat:1,speed:.5}];
+const sequenceTestDraft={segments,renderSettings:{renderer:'godot',view:'front',frame_size:128,supersample:4,equipment_id:null}};
+const recipe=sequenceRecipe(sequenceTestDraft),saved={sequence_preview:{recipe,delivery:'unified',clips:{'d/a':'x','d/b':'y'}},deliveries:[{id:'unified',clips:[{name:'x',sheet:'x'},{name:'y',sheet:'y'}]}]};
+if(!sequencePreviewOptions(saved,sequenceTestDraft,options))throw Error('Unified render must map sources to exact new sheets');
+if(sequencePreviewOptions({...saved,sequence_preview:null},sequenceTestDraft,options)!==null)throw Error('Mixed legacy sheets must not play as unified');
+sequenceTestDraft.segments.reverse();sequenceTestDraft.segments[0].repeat=3;
+if(!sequencePreviewOptions(saved,sequenceTestDraft,options))throw Error('Order and repeat changes must reuse same camera');
+sequenceTestDraft.renderSettings.view='side';if(sequencePreviewOptions(saved,sequenceTestDraft,options)!==null)throw Error('Camera changes must invalidate preview');
+sequenceTestDraft.renderSettings.view='front';sequenceTestDraft.segments.reverse();sequenceTestDraft.segments[1].repeat=1;
+const plan=buildSequence(segments,options);
+if(plan.count!==14||plan.duration!==5)throw Error('Each clip must retain frame rate, repeat count and speed');
+if(sequenceFrame(plan,4).local!==0||sequenceFrame(plan,8).span.source.title!=='B')throw Error('Repeated clip or boundary mapped incorrectly');
+if(sequenceFrameAt(plan,1)!==8||sequenceFrameAt(plan,5)!==13||sequenceTime(plan,11)!==3)throw Error('Global seeking lost variable frame rates');
+let rejected=false;try{buildSequence([{...segments[0],delivery:'missing'}],options);}catch{rejected=true;}if(!rejected)throw Error('Missing assets must fail explicitly');
+let draw;const p={plan,frame:9,count:14,canvas:{width:16,height:16},ctx:{clearRect(){},drawImage(...args){draw=args;}},images:new Map([['b',{naturalWidth:48}]])};
+drawSequenceFrame(p);if(draw[1]!==16||draw[2]!==0||$('preview-meta').textContent!=='2 / 2 · B')throw Error('Sequence must draw the correct sheet cell and current segment');
+$('play-speed').value='1';player={...p,position:4.8,last:0,playing:true,loop:false};tickSequence(player,300);if(player.playing||player.frame!==13)throw Error('Play once must stop on final frame');
+setPlaying(true);if(player.position!==0||player.frame!==0)throw Error('Restart after completion must begin at first frame');
+player={...p,position:4.8,last:0,playing:true,loop:true,images:new Map([['a',{naturalWidth:64}],['b',{naturalWidth:48}]])};tickSequence(player,300);if(!player.playing||Math.abs(player.position-.1)>.00001||player.frame!==0)throw Error('Loop must preserve overflow time');
+`,ctx);
+console.log('Sequence frame rates, repeats, seeking, completion, looping and asset references passed');

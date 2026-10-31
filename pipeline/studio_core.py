@@ -79,7 +79,7 @@ def controller(*args):
         process.stdout.close()
     if code:
         if reason:
-            if '网格面数与角色不符' in reason or '默认人偶' in reason:
+            if ('网格面数与角色不符' in reason or '默认人偶' in reason) and '自动恢复' not in reason:
                 reason+='。Mixamo 云端人物可能已改变；请在“人工绑定”恢复并确认本角色，再新建动作下载任务。无需重新建模。'
             raise ValueError(reason)
         raise subprocess.CalledProcessError(code,command)
@@ -129,7 +129,7 @@ def rig(character, model=None):
 
 @track_failures
 def download(character, names, batch):
-    binding = require_ready(character)
+    binding = require_ready(character,allow_cloud_recovery=True)
     progress_update(character, 'download', '开始动作下载与角色检查', batch=batch)
     target = workspace(character) / 'animations' / slug(batch)
     if target.exists():
@@ -213,7 +213,9 @@ def make_preview(sheet, destination, duration_seconds):
 
 
 @track_failures
-def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None):
+def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None, renderer="godot", equipment_usage_sha256=None):
+    if renderer not in ('godot','blender'):
+        raise ValueError('未知渲染后端')
     if frame_size not in (64, 128) or supersample not in (1, 2, 4):
         raise ValueError('Unsupported frame size or supersampling factor')
     render_size = frame_size * supersample
@@ -242,10 +244,16 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         check_motion(info)
         if info.get('textured_surfaces', 0) < 1:
             raise ValueError(f'{name}: 缺失贴图，禁止发布白模动画；请重新绑定带贴图上传包')
+    equipment_usage = None
     equipment_config = None
     if equipment_id:
         from equipment import load as load_equipment
         equipment_config = load_equipment(BASE_DIR, character, batch, equipment_id)
+        from equipment_usage import load as load_usage, fingerprint, recipe
+        settings=load_usage(BASE_DIR,character,equipment_id)
+        if equipment_usage_sha256 and fingerprint(settings)!=equipment_usage_sha256:
+            raise ValueError('武器持用设置已变化，请创建新的导出任务')
+        equipment_usage=recipe(settings,files)
     job_id = new_batch()
     job = BASE_DIR / '.local/jobs' / job_id
     project = job / 'godot'
@@ -255,6 +263,7 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         copy_runtime(BASE_DIR, project)
         stage_model(equipment_config,BASE_DIR/'workspaces'/character/'equipment'/equipment_id/'weapon.glb',project)
         (project / 'equipment.json').write_text(json.dumps(equipment_config, indent=2))
+        (project / 'equipment_usage.json').write_text(json.dumps(equipment_usage,indent=2))
     inputs = project / 'animations'
     inputs.mkdir()
     for name in files:
@@ -263,20 +272,25 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
     staging.mkdir()
     (job / 'job.json').write_text(json.dumps({
         'character': character, 'batch': batch, 'source_files': files,
-        'quality_gate': 'textured-moving-visible-v2'
+        'renderer': renderer, 'quality_gate': 'textured-moving-visible-v2'
     }, indent=2) + '\n')
     print(f'仅烘焙角色 {character} / 批次 {batch}；日志与暂存: {job}', flush=True)
     # Headless is suitable for importing, but dummy rendering cannot capture sprites.
-    progress_update(character, 'import', '正在将指定动作批次导入 Godot', job=str(job), batch=batch)
+    progress_update(character, 'import', '正在准备 Blender 的动画与装备' if renderer == 'blender' else '正在将指定动作批次导入 Godot', job=str(job), batch=batch)
     with (job / 'import.log').open('w') as log:
         subprocess.run([GODOT, '--headless', '--editor', '--path', str(project), '--import',
                         '--log-file', str(job / 'import-engine.log')],
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
-    progress_update(character, 'render', '正在测量动作范围并渲染图集', job=str(job), batch=batch)
-    with (job / 'bake.log').open('w') as log:
-        subprocess.run([GODOT, '--path', str(project), '--rendering-method', 'gl_compatibility',
-                        '--log-file', str(job / 'render-engine.log'), '--', '--output', str(staging), '--view', view, '--frame-size', str(render_size)], stdout=log,
-                       stderr=subprocess.STDOUT, check=True, timeout=180)
+    if renderer == 'godot':
+        progress_update(character, 'render', '正在测量动作范围并渲染图集', job=str(job), batch=batch)
+        with (job / 'bake.log').open('w') as log:
+            subprocess.run([GODOT, '--path', str(project), '--rendering-method', 'gl_compatibility',
+                            '--log-file', str(job / 'render-engine.log'), '--', '--output', str(staging), '--view', view, '--frame-size', str(render_size)], stdout=log,
+                           stderr=subprocess.STDOUT, check=True, timeout=180)
+    else:
+        progress_update(character, 'render', 'Blender 正在测量姿态范围并渲染图集', job=str(job), batch=batch)
+        from blender_backend import render
+        render(BASE_DIR, project, staging, job, view, render_size, GODOT)
     progress_update(character, 'validate', '正在检查配色、空帧、裁切和时序，并生成预览', job=str(job), batch=batch)
     from pixel_finish import finish_batch
     sheet_paths = [staging / f'{Path(name).stem}_spritesheet.png' for name in files]
@@ -285,7 +299,7 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         validate_sheet(sheet, render_size)
     pixel_settings = finish_batch(sheet_paths, frame_size=frame_size)
     pixel_settings.update(render_size=render_size, supersample=supersample)
-    metadata = {'pixel_style': pixel_settings}
+    metadata = {'renderer': renderer, 'pixel_style': pixel_settings}
     for name in files:
         sheet = staging / f'{Path(name).stem}_spritesheet.png'
         metadata[sheet.name] = validate_sheet(sheet, frame_size)
@@ -297,9 +311,15 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         timing_path.write_text(json.dumps(timing, indent=2) + '\n')
         metadata[sheet.name].update(timing)
         make_preview(sheet, staging / f'{Path(name).stem}_preview.gif', timing['duration_seconds'])
+    if data.get('kind')=='sequence':
+        cameras=[metadata[f'{Path(name).stem}_spritesheet.png'].get('camera') for name in files]
+        if not cameras or not cameras[0] or any(camera!=cameras[0] for camera in cameras):
+            raise ValueError('编排动作相机参数不一致，拒绝发布统一预览')
     metadata['source'] = {'character': character, 'batch': batch, 'job': job_id, 'files': files}
+    if data.get('kind')=='sequence': metadata['source']['kind']='sequence'
     if equipment_config:
-        metadata['equipment'] = {'id': equipment_id, 'config': equipment_config}
+        metadata['equipment'] = {'id': equipment_id, 'config': equipment_config, 'usage':equipment_usage}
+        (staging / 'equipment_usage.json').write_text(json.dumps(equipment_usage,indent=2))
         (staging / 'equipment.json').write_text(json.dumps(equipment_config, ensure_ascii=False, indent=2))
     metadata['review'] = 'Automated checks passed; artistic quality and gameplay fit require visual review.'
     (staging / 'manifest.json').write_text(json.dumps(metadata, indent=2) + '\n')
@@ -374,6 +394,7 @@ def main():
         if command in ['build', 'bake']:
             p.add_argument('--view', choices=['front', 'side', 'three_quarter'], default='three_quarter')
         if command == 'bake':
+            p.add_argument('--renderer', choices=['godot','blender'], default='godot')
             p.add_argument('--equipment', help='已确认的装备配置编号')
             p.add_argument('--frame-size', type=int, choices=[64, 128], default=128)
             p.add_argument('--supersample', type=int, choices=[1, 2, 4], default=1)
@@ -412,7 +433,7 @@ def main():
             from review_character import review
             review(args.character, args.batch, args.capture_only)
         elif args.command == 'bake':
-            bake(args.character, args.batch, args.view, args.frame_size, args.supersample, args.equipment)
+            bake(args.character, args.batch, args.view, args.frame_size, args.supersample, args.equipment, args.renderer)
         elif args.command == 'build':
             names = [v.strip() for v in args.actions.split(',') if v.strip()]
             if not names or len({slug(v.lower().replace(' ', '_')) for v in names}) != len(names):

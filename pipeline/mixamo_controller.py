@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 from progress import update as progress_update
 from asset_inspector import inspect_download, source_geometry
 from mixamo_state import (character_name, check_mesh_identity, check_motion, file_hash,
-                          read_state, require_ready, state_path, write_state)
+                          read_state, require_ready, state_path, write_state, MeshIdentityError, check_bound_skeleton)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_FILE = BASE_DIR / '.local/auth/mixamo_session.json'
@@ -32,6 +32,18 @@ def character_lock(character):
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+@contextmanager
+def cloud_lock():
+    # Different character profiles can still share the same Adobe cloud character.
+    path=BASE_DIR/'.local/mixamo/cloud.lock'
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('w') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('已有 Mixamo 云端任务，请等待完成后再切换人物')
+        try: yield
+        finally: fcntl.flock(lock,fcntl.LOCK_UN)
 
 
 def browser_options(playwright):
@@ -159,7 +171,7 @@ def action_upload(model, character):
     if not source.is_file():
         raise ValueError(f'找不到模型: {source}')
     source_sha = file_hash(source)
-    with character_lock(character), sync_playwright() as p:
+    with cloud_lock(), character_lock(character), sync_playwright() as p:
         fields = {'source_model': str(source), 'source_sha256': source_sha}
         write_state(character, 'opening_browser', **fields)
         progress_update(character, 'rig', '正在打开 Mixamo 并上传指定角色')
@@ -249,6 +261,61 @@ def select_animation(page, anim_name):
     card.get_by_text(anim_name, exact=True).click()
 
 
+def restore_bound_character(page, character, state):
+    """Reuse reviewed skinning only. Never place markers or approve new auto-rigging."""
+    current=require_ready(character,allow_cloud_recovery=True)
+    if current['bound_sha256']!=state['bound_sha256']:
+        raise ValueError('本地绑定版本已变化，请新建下载任务')
+    progress_update(character,'download','云端人物不匹配，正在上传本地已验收绑定模型自动恢复')
+    upload=page.get_by_role('button',name='Upload Character',exact=False)
+    upload.wait_for(timeout=30000)
+    upload.click()
+    page.locator('input[type="file"]').set_input_files(state['bound_model'])
+    started=time.monotonic()
+    stable=0
+    clicks=0
+    while time.monotonic()-started<180:
+        if page.is_closed(): raise ValueError('恢复人物时浏览器已关闭')
+        modal=page.locator('.modal-dialog:visible, [role="dialog"]:visible').first
+        if modal.count() and modal.is_visible():
+            stable=0
+            text=modal.inner_text().lower()
+            if any(word in text for word in ('place markers','place the markers','chin','groin','auto-rigging','auto rigging')):
+                raise ValueError('Mixamo 要求重新摆点或绑定；自动恢复已停止，请到人工绑定检查')
+            if any(word in text for word in ('upload failed','unable to','error occurred','sorry')):
+                raise ValueError('Mixamo 拒绝已绑定模型，请到人工绑定检查')
+            # Only advance the review/replace confirmation for an already-skinned model.
+            for label in ('Use This Character','Use this character','Confirm','Next'):
+                button=modal.get_by_role('button',name=label,exact=True)
+                if button.count() and button.first.is_visible() and button.first.is_enabled():
+                    if label=='Next' and not any(word in text for word in ('review','uploaded successfully','ready','change character','replace')):
+                        continue
+                    if clicks>=4: raise ValueError('恢复人物的网页确认未完成，请到人工绑定检查')
+                    button.first.click();clicks+=1
+                    break
+        else:
+            loading=page.locator('.loading:visible, .loading-spinner:visible').count()>0
+            download=page.get_by_role('button',name='Download',exact=True)
+            stable=stable+1 if not loading and download.count() and download.first.is_visible() else 0
+            if stable>=6:
+                if file_hash(Path(state['bound_model']))!=state['bound_sha256']:
+                    raise ValueError('恢复期间本地绑定模型已变化')
+                progress_update(character,'download','已上传绑定模型，正在重新选择动作并验证人物身份')
+                return
+        page.wait_for_timeout(500)
+    raise ValueError('自动恢复人物超时；请检查登录状态或到人工绑定恢复')
+
+
+def request_animation(page, anim_name, pending):
+    select_animation(page,anim_name)
+    page.wait_for_timeout(8000)
+    in_place=page.get_by_label('In Place',exact=True)
+    if in_place.count() and in_place.first.is_visible():
+        in_place.first.check();page.wait_for_timeout(2000)
+    save_download(page,pending)
+    return inspect_download(pending)
+
+
 def action_download(anim_name, output_fbx, character):
     character_name(character)
     output = Path(output_fbx).resolve()
@@ -259,33 +326,47 @@ def action_download(anim_name, output_fbx, character):
         raise ValueError('动作必须位于指定角色的 animations/<批次>/<动作>.fbx')
     if len(parts) != 2 or output.suffix.lower() != '.fbx' or output.exists():
         raise ValueError('非法动作路径或目标已存在，拒绝覆盖')
-    with character_lock(character), sync_playwright() as p:
-        state = require_ready(character)
+    with cloud_lock(), character_lock(character), sync_playwright() as p:
+        state = require_ready(character,allow_cloud_recovery=True)
         context, page = open_profile(p, character, visible=False)
         pending = state_path(character).parent / ('download-' + uuid.uuid4().hex[:12] + '.fbx')
+        marker=output.parent/'.mixamo-recovery.json'
+        recovery_started=False
         try:
             page.goto('https://www.mixamo.com/#/?page=1&type=Motion%2CMotionPack', wait_until='domcontentloaded')
-            select_animation(page, anim_name)
-            # Give Mixamo time to apply its remote clip. Structural checks below are mandatory.
-            page.wait_for_timeout(8000)
-            in_place = page.get_by_label('In Place', exact=True)
-            if in_place.count() and in_place.first.is_visible():
-                in_place.first.check()
-                page.wait_for_timeout(2000)
-            progress_update(character, 'download', f'{anim_name}：正在请求 FBX 下载', action=anim_name)
-            save_download(page, pending)
-            progress_update(character, 'download', f'{anim_name}：下载完成，正在检查贴图、骨骼和动态轨道', action=anim_name)
-            info = inspect_download(pending)
-            check_mesh_identity(info, state['geometry'])
-            check_motion(info)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            pending.rename(output)
-            output.with_suffix('.inspection.json').write_text(json.dumps(info, indent=2) + '\n')
-            print(f'角色网格和动态轨道检查通过: {output}', flush=True)
+            for attempt in range(2):
+                progress_update(character,'download',f'{anim_name}：正在下载并检查人物、贴图、骨骼和动态轨道',action=anim_name)
+                info=request_animation(page,anim_name,pending)
+                try:
+                    check_mesh_identity(info,state['geometry'])
+                    check_bound_skeleton(info,state['geometry'])
+                except MeshIdentityError as mismatch:
+                    if attempt or marker.exists():
+                        raise MeshIdentityError(str(mismatch)+'；本任务已尝试自动恢复一次，请到人工绑定恢复并确认本角色，再新建下载任务') from mismatch
+                    output.parent.mkdir(parents=True,exist_ok=True)
+                    marker.write_text(json.dumps({'character':character,'bound_sha256':state['bound_sha256'],'reason':str(mismatch)},ensure_ascii=False,indent=2))
+                    recovery_started=True
+                    print('人物身份校验失败，尝试一次自动恢复：'+str(mismatch),flush=True)
+                    # Keep the rejected file local for diagnostics; never publish it.
+                    pending.rename(pending.with_name(pending.stem+'-rejected.fbx'))
+                    restore_bound_character(page,character,state)
+                    continue
+                check_motion(info)
+                current=require_ready(character,allow_cloud_recovery=True)
+                if current['bound_sha256']!=state['bound_sha256']:
+                    raise ValueError('下载期间本地绑定版本已变化')
+                output.parent.mkdir(parents=True,exist_ok=True)
+                pending.rename(output)
+                output.with_suffix('.inspection.json').write_text(json.dumps(info,indent=2)+'\n')
+                fields={k:v for k,v in state.items() if k not in ('character','status','error','cloud_recovery')}
+                write_state(character,'ready',**fields)
+                progress_update(character,'download',f'{anim_name}：人物身份、贴图、骨骼与动态轨道校验通过',action=anim_name)
+                print(f'角色网格和动态轨道检查通过: {output}',flush=True)
+                return
         except Exception as exc:
-            # Wrong cloud state must be reviewed again, not silently reused.
-            if isinstance(exc, ValueError):
-                write_state(character, 'needs_review', **{k: v for k, v in state.items() if k not in ('character', 'status', 'error')}, error=str(exc))
+            if isinstance(exc,MeshIdentityError) or recovery_started:
+                fields={k:v for k,v in state.items() if k not in ('character','status','error','cloud_recovery')}
+                write_state(character,'needs_review',**fields,error=str(exc),cloud_recovery=False)
             raise
         finally:
             context.close()

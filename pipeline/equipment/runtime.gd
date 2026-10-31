@@ -65,3 +65,49 @@ static func weapon_model(config: Dictionary) -> Node3D:
                 node.set_surface_override_material(i, material)
         stack.append_array(node.get_children())
     return root
+
+## All mounts use the same immutable weapon model and grip. Positions are in
+## bone-local metres; source units are applied once, matching the hand editor.
+static func usage_setup(skeleton: Skeleton3D, config: Dictionary, usage: Dictionary) -> Dictionary:
+    var result := {}
+    var hand := attach(skeleton, config)
+    if hand == null: return {}
+    hand.get_child(0).name = "STUDIO_WEAPON_HAND"
+    result.hand = hand
+    for state in ["back", "waist"]:
+        var mount: Dictionary = usage.mounts[state]
+        if skeleton.find_bone(mount.bone) < 0:
+            push_error("Missing storage bone: " + str(mount.bone))
+            for node in result.values(): node.queue_free()
+            return {}
+        var attachment := BoneAttachment3D.new()
+        attachment.bone_name = mount.bone
+        skeleton.add_child(attachment)
+        var weapon := weapon_model(config)
+        if weapon == null:
+            attachment.queue_free()
+            for node in result.values(): node.queue_free()
+            return {}
+        weapon.name = "STUDIO_WEAPON_" + state.to_upper()
+        attachment.add_child(weapon)
+        var rotation: Array = mount.rotation
+        var basis := Basis.from_euler(Vector3(deg_to_rad(rotation[0]), deg_to_rad(rotation[1]), deg_to_rad(rotation[2])))
+        basis = basis * float(config.source_units_per_meter) * float(config.weapon_scale)
+        var grip := frame(config.weapon_points)
+        var position: Array = mount.position
+        var origin := Vector3(position[0],position[1],position[2]) * float(config.source_units_per_meter)
+        weapon.transform = Transform3D(basis, origin - basis * grip.origin)
+        result[state] = attachment
+    return result
+
+static func usage_state(usage: Dictionary, clip: String, phase: float) -> String:
+    var action: Dictionary = usage.get("clips", {}).get(clip, {})
+    var state: String = action.get("initial", "inherit")
+    if state == "inherit": state = usage.get("default", "hand")
+    for event in action.get("events", []):
+        if phase + 0.000001 >= float(event.at): state = event.state
+    return state
+
+static func usage_apply(attachments: Dictionary, usage: Dictionary, clip: String, phase: float) -> void:
+    var state := usage_state(usage, clip, phase)
+    for key in attachments: attachments[key].visible = key == state

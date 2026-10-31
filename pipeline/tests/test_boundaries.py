@@ -6,6 +6,7 @@ import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import unittest
+import pixel_finish  # Load SciPy CPU probing before renderer subprocess mocks.
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 
@@ -81,6 +82,32 @@ class Boundaries(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in destination.iterdir()), ['manifest.json', 'run_preview.gif', 'run_render.json', 'run_spritesheet.png'])
         manifest = json.loads((destination / 'manifest.json').read_text())
         self.assertEqual(list(manifest['source']['files']), ['run.fbx'])
+
+    def test_sequence_without_shared_camera_is_not_published(self):
+        receipt=self.root/'workspaces/hero/animations/run1/batch.json'
+        data=json.loads(receipt.read_text());data['kind']='sequence';receipt.write_text(json.dumps(data))
+        with patch.object(studio.subprocess,'run',side_effect=self.renderer()), self.assertRaisesRegex(ValueError,'相机参数不一致'):
+            studio.bake('hero','run1')
+        self.assertEqual(list((self.root/'deliverables/hero').glob('*/manifest.json')),[])
+
+    def test_blender_uses_separate_adapter_and_records_backend(self):
+        def render(root, project, staging, job, view, size, godot):
+            self.assertEqual(sorted(p.name for p in (project/'animations').iterdir()), ['run.fbx'])
+            self.assertEqual(size,128)
+            sheet(staging/'run_spritesheet.png')
+            (staging/'run_render.json').write_text(json.dumps({'renderer':'blender','duration_seconds':1.0,'frame_count':10,'fps':10}))
+        with patch.object(studio.subprocess,'run',side_effect=self.renderer()), patch('blender_backend.render',side_effect=render) as adapter:
+            destination=studio.bake('hero','run1',renderer='blender')
+        self.assertEqual(adapter.call_count,1)
+        self.assertEqual(json.loads((destination/'manifest.json').read_text())['renderer'],'blender')
+
+    def test_blender_failure_does_not_publish_and_unknown_renderer_rejected(self):
+        with patch.object(studio.subprocess,'run',side_effect=self.renderer()), patch('blender_backend.render',side_effect=ValueError('Blender failed')):
+            with self.assertRaisesRegex(ValueError,'Blender failed'):
+                studio.bake('hero','run1',renderer='blender')
+        self.assertFalse(any((self.root/'deliverables').glob('**/manifest.json')))
+        with self.assertRaisesRegex(ValueError,'未知渲染'):
+            studio.bake('hero','run1',renderer='shell')
 
     def test_static_output_never_published(self):
         with patch.object(studio.subprocess, 'run', side_effect=self.renderer(animated=False)):

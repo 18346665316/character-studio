@@ -6,7 +6,7 @@ def guidance(character, jobs):
     current=next((j for j in own if j['status'] in ('queued','running')),own[0] if own else None)
     if current and current['status'] in ('queued','running'):
         return {'stage':STAGES.get(current['action'],0),'label':'查看当前任务','reason':'任务正在执行，完成后检查结果。','running':True}
-    if character['rig']['status']=='needs_review':
+    if character['rig']['status']=='needs_review' and not character['rig'].get('recovery_available'):
         return {'stage':1,'label':'恢复 Mixamo 人物','reason':'云端人物需要复核，本地模型与历史交付仍保留。'}
     if current and current['status'] in ('failed','interrupted'):
         return {'stage':STAGES.get(current['action'],0),'label':'处理未完成的步骤','reason':current.get('error') or '查看原因后重试当前步骤。','retry':current['id']}
