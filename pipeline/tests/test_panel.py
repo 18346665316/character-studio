@@ -82,8 +82,12 @@ class PanelTests(unittest.TestCase):
         c=self.panel.character('hero')
         self.assertIn('idle.fbx',c['approvals']['animations']['b1'])
         self.assertNotIn('walking.fbx',c['approvals']['animations']['b1'])
-        with self.assertRaisesRegex(ValueError,'确认该批次'):
+        with self.assertRaisesRegex(ValueError,'确认所选动作'):
             self.panel.validate_task('hero','bake',{'batch':'b1'})
+        self.assertEqual(self.panel.validate_task('hero','bake',{'batch':'b1','files':['idle.fbx']})['files'],['idle.fbx'])
+        for files in [[],['idle.fbx','idle.fbx'],['other.fbx'],'idle.fbx']:
+            with self.assertRaises(ValueError):
+                self.panel.validate_task('hero','bake',{'batch':'b1','files':files})
         with self.assertRaisesRegex(ValueError,'不属于'):
             self.panel.approve(dict(request,file='other.fbx'))
         (captures/'walking_0.png').unlink()
@@ -99,7 +103,7 @@ class PanelTests(unittest.TestCase):
         atomic(receipt,{'character':'hero','batch':'b1','files':{'idle.fbx':'changed','walking.fbx':'walk-hash'}})
         with self.assertRaisesRegex(ValueError,'已变化'):
             self.panel.approve(dict(request,file='idle.fbx'))
-        with self.assertRaisesRegex(ValueError,'确认该批次'):
+        with self.assertRaisesRegex(ValueError,'确认所选动作'):
             self.panel.validate_task('hero','bake',{'batch':'b1'})
 
     def test_animation_title_preserves_mixamo_request(self):
@@ -137,7 +141,7 @@ class PanelTests(unittest.TestCase):
         config = self.panel.validate_task('hero','bake',{'batch':'b1','frame_size':64,'supersample':4})
         self.assertEqual(config['frame_size'],64)
         atomic(self.ws/'animations/b1/batch.json',{'character':'hero','batch':'b1','files':{'idle.fbx':'changed'}})
-        with self.assertRaisesRegex(ValueError,'确认该批次'):
+        with self.assertRaisesRegex(ValueError,'确认所选动作'):
             self.panel.validate_task('hero','bake',{'batch':'b1'})
 
     def test_asset_access_denies_private_files_and_traversal(self):

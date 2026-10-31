@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const elements=new Map(),ctx=vm.createContext({document:{getElementById(id){if(!elements.has(id))elements.set(id,{setAttribute(){}});return elements.get(id);},querySelectorAll(){return[];}},localStorage:{getItem(){return null;}},performance:{now(){return 0;}},requestAnimationFrame(){return 1;},cancelAnimationFrame(){}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../panel_ui/sequence.js'),'utf8'),ctx);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../panel_ui/workspace.js'),'utf8'),ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../panel_ui/app.js'),'utf8').replace('refresh(true);setInterval(()=>refresh(),2500);',''),ctx);
 vm.runInContext(`
 const options=[{id:'d/a',title:'A',item:{sheet:'a',info:{frame_count:4,frame_width:16,frame_height:16,fps:4}}},{id:'d/b',title:'B',item:{sheet:'b',info:{frame_count:6,frame_width:16,frame_height:16,fps:3}}}];

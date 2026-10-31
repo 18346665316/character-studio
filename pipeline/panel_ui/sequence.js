@@ -50,7 +50,7 @@ function renderSequence(c){
  const title=node('input');title.value=draft.title;title.maxLength=60;title.oninput=()=>{draft.title=title.value;remember();};title.onchange=()=>{draft.title=title.value.trim()||'动作编排';changed();};controls.append(field('编排名称',title));
  controls.append(field('整段播放',select([['loop','循环播放'],['once','播放一次']],draft.loop?'loop':'once',v=>{draft.loop=v==='loop';changed();})));
  const choice=select(options.map(o=>[o.id,`${o.title} · ${rendererName(o.delivery.renderer)} · ${o.delivery.equipment?.config?.weapon_name||(o.delivery.equipment?'标准单手剑':'空手')} · ${sourceTime(o.delivery.id)}`]),options[0]?.id,()=>{});
- controls.append(field('添加已渲染动画',choice),button('＋ 添加片段',()=>{const o=options.find(v=>v.id===choice.value);if(o){draft.segments.push({delivery:o.delivery.id,clip:o.item.name,repeat:1,speed:1});changed();}},'full',!options.length||draft.segments.length>=64));
+ controls.append(field('添加原动作来源',choice),button('＋ 添加片段',()=>{const o=options.find(v=>v.id===choice.value);if(o){draft.segments.push({delivery:o.delivery.id,clip:o.item.name,repeat:1,speed:1});changed();}},'full',!options.length||draft.segments.length>=64));
  controls.append(button('保存编排',()=>mutation('/api/sequence',{character:selected,...draft},'动作编排已保存到当前人物。'),'primary full',blocked()||state.api_version<10),note(JSON.stringify(draft)===JSON.stringify(c.sequence)?'编排已保存。':'当前编排有未保存的修改。'));
  const rendering=node('div',undefined,'sequence-rendering');rendering.append(node('h3','统一取景'));
  rendering.append(field('编排渲染器',select([['godot','Godot'],['blender','Blender · Eevee']],renderSettings.renderer,v=>{renderSettings.renderer=v;changed();})),field('编排视角',select([['front','正面'],['side','侧面'],['three_quarter','四分之三']],renderSettings.view,v=>{renderSettings.view=v;changed();})),field('编排帧尺寸',select([[64,'64 × 64'],[128,'128 × 128']],renderSettings.frame_size,v=>{renderSettings.frame_size=Number(v);changed();})),field('编排装备',select([['','空手'],...c.equipment.map(e=>[e.id,e.weapon_name||'标准单手剑'])],renderSettings.equipment_id||'',v=>{renderSettings.equipment_id=v||null;changed();})),note('整段动作共用同一相机、画布、装备和调色板。更改顺序、速度与重复次数无需重新渲染。'));
@@ -59,14 +59,19 @@ function renderSequence(c){
  const list=node('ol',undefined,'sequence-list');list.setAttribute('aria-label','动作编排片段');
  draft.segments.forEach((segment,index)=>{
   const source=options.find(o=>o.id===segment.delivery+'/'+segment.clip),row=node('li',undefined,'sequence-segment');row.dataset.segment=index;
-  row.append(node('strong',`${index+1}. ${source?.title||'图集已缺失'}`));
-  if(source)row.append(note(`原动画来源：${sourceTime(source.delivery.id)}。预览统一使用 ${rendererName(renderSettings.renderer)} · ${renderSettings.frame_size}px · ${renderSettings.view}。`));
+  const name=node('strong',`${index+1}. ${source?.title||'图集已缺失'}`,'segment-name');
+  if(source)name.title=`原动作来源：${sourceTime(source.delivery.id)}`;
   const settings=node('div',undefined,'sequence-settings');
-  const repeat=select(Array.from({length:20},(_,i)=>[i+1,`${i+1} 次`]),segment.repeat,v=>{segment.repeat=Number(v);changed();});
-  settings.append(field(`第 ${index+1} 段重复次数`,repeat),field(`第 ${index+1} 段速度`,select([[.25,'0.25×'],[.5,'0.5×'],[1,'1×'],[1.5,'1.5×'],[2,'2×'],[4,'4×']],segment.speed,v=>{segment.speed=Number(v);changed();})));
-  const actions=node('div',undefined,'sequence-actions');actions.append(button('上移',()=>{[draft.segments[index-1],draft.segments[index]]=[draft.segments[index],draft.segments[index-1]];changed();},'',index===0),button('下移',()=>{[draft.segments[index+1],draft.segments[index]]=[draft.segments[index],draft.segments[index+1]];changed();},'',index===draft.segments.length-1),button('移除',()=>{draft.segments.splice(index,1);changed();}));row.append(settings,actions);list.append(row);
- });controls.append(list);
- if(!draft.segments.length){content.append(placeholder('添加动画，开始编排','在右侧选择已渲染的动画并添加片段，同一动作可添加多次。'));if(!options.length)controls.append(note('暂无可播放图集。请先在动画中导出图集，再回来编排。'));return;}
+  const repeat=select(Array.from({length:20},(_,i)=>[i+1,`${i+1} 次`]),segment.repeat,v=>{segment.repeat=Number(v);changed();});repeat.setAttribute('aria-label',`第 ${index+1} 段重复次数`);repeat.title='重复次数';
+  const speed=select([[.25,'0.25×'],[.5,'0.5×'],[1,'1×'],[1.5,'1.5×'],[2,'2×'],[4,'4×']],segment.speed,v=>{segment.speed=Number(v);changed();});speed.setAttribute('aria-label',`第 ${index+1} 段速度`);speed.title='播放速度';settings.append(repeat,speed);
+  const actions=node('div',undefined,'sequence-actions');
+  const up=button('↑',()=>{[draft.segments[index-1],draft.segments[index]]=[draft.segments[index],draft.segments[index-1]];changed();},'',index===0);
+  const down=button('↓',()=>{[draft.segments[index+1],draft.segments[index]]=[draft.segments[index],draft.segments[index+1]];changed();},'',index===draft.segments.length-1);
+  const remove=button('×',()=>{draft.segments.splice(index,1);changed();});
+  for(const [control,label]of [[up,'上移'],[down,'下移'],[remove,'移除']]){control.setAttribute('aria-label',`${label}第 ${index+1} 段`);control.title=label;}
+  actions.append(up,down,remove);row.append(name,settings,actions);list.append(row);
+ });content.append(node('h3','片段顺序'),list);
+ if(!draft.segments.length){content.append(placeholder('添加动画，开始编排','选择图集记录对应的原动作并添加片段，同一动作可添加多次。'));if(!options.length)controls.append(note('先在图集页生成一份结果，作为编排的原动作来源。'));return;}
  try{
   if(!previewOptions){content.append(placeholder('需要生成统一预览','先按编排中的全部动作统一取景，再连续播放，避免跨图集尺寸和位置跳变。'));return;}
   const plan=buildSequence(draft.segments,previewOptions);content.append(node('div',`${draft.segments.length} 个片段 · ${plan.duration.toFixed(2)} 秒`,'sequence-summary'));

@@ -204,7 +204,7 @@ class Panel:
             if info.get('source', {}).get('character') != character:
                 continue
             deliveries.append({'id':manifest.parent.name, 'batch':info.get('source', {}).get('batch'),
-                               'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
+                               'operation':info.get('operation'), 'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
                                'quality_report':info.get('quality_report'), 'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
                                'clips':[{'name':p.stem.replace('_preview',''), 'gif':self.asset(p),
                                          'sheet':self.asset(p.with_name(p.name.replace('_preview.gif','_spritesheet.png'))),
@@ -369,11 +369,15 @@ class Panel:
                     clean['equipment_id'] = name(params['equipment_id'])
                     load_equipment(self.root, character, batch, clean['equipment_id'])
             if action == 'bake':
+                chosen=params.get('files',match['files'])
+                if not isinstance(chosen,list) or not chosen or any(not isinstance(f,str) or f not in match['files'] for f in chosen) or len(set(chosen))!=len(chosen):
+                    raise ValueError('请选择此来源内的有效动作')
+                clean['files']=chosen
                 approval = c['approvals'].get('motions', {}).get(batch, {})
                 if approval.get('fingerprint') != match['fingerprint'] and not all(
                         c['approvals'].get('animations',{}).get(batch,{}).get(file,{}).get('fingerprint')==match['fingerprint']
-                        for file in match['files']):
-                    raise ValueError('请先检查并确认该批次动作')
+                        for file in chosen):
+                    raise ValueError('请先检查并确认所选动作')
                 if params.get('equipment_id'):
                     from equipment import load as load_equipment
                     clean['equipment_id'] = name(params['equipment_id'])
@@ -552,12 +556,12 @@ def handler(panel):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             try:
-                if parsed.path in ('/','/app.js','/sequence.js','/style.css'):
+                if parsed.path in ('/','/app.js','/sequence.js','/workspace.js','/style.css'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':13,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':14,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):

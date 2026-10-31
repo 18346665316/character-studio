@@ -252,7 +252,7 @@ def make_game_version(sheet, timing, quality, equipment_usage=None):
 
 
 @track_failures
-def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None, renderer="godot", equipment_usage_sha256=None):
+def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None, renderer="godot", equipment_usage_sha256=None, selected_files=None):
     if renderer not in ('godot','blender'):
         raise ValueError('未知渲染后端')
     if frame_size not in (64, 128) or supersample not in (1, 2, 4):
@@ -269,6 +269,10 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
     files = data.get('files', {})
     if not files:
         raise ValueError('批次没有动作文件')
+    if selected_files is not None:
+        if not isinstance(selected_files,list) or not selected_files or any(not isinstance(f,str) or f not in files for f in selected_files) or len(set(selected_files))!=len(selected_files):
+            raise ValueError('所选动作不属于此来源')
+        files={f:files[f] for f in selected_files}
     for name, sha in files.items():
         if Path(name).name != name or Path(name).suffix.lower() not in ('.fbx', '.glb'):
             raise ValueError(f'非法批次文件名: {name}')

@@ -7,6 +7,7 @@ const elements = new Map();
 const document = {getElementById(id) {if (!elements.has(id)) elements.set(id,{});return elements.get(id);}};
 const context = vm.createContext({document,localStorage:{getItem(){return null;}},requestAnimationFrame(){return 1;},cancelAnimationFrame(){},performance:{now(){return 0;}},console});
 const source = fs.readFileSync(path.join(__dirname,'../panel_ui/app.js'),'utf8').replace('refresh(true);setInterval(()=>refresh(),2500);','');
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../panel_ui/workspace.js'),'utf8'),context);
 vm.runInContext(source,context);
 vm.runInContext(`
 const old={id:'old',current_rig:false,files:['jogging.fbx'],fingerprint:'old-fp'};
@@ -47,3 +48,20 @@ if(drawArgs[1]!==64||drawArgs[2]!==64||document.getElementById('timeline').value
 assert.equal(elements.get('frame-label').textContent,'6 / 12');
 module.exports={passed:15};
 if(require.main===module)console.log('Editor resource, approval, provenance and timeline checks passed');
+
+vm.runInContext(`
+for(const [type,page]of Object.entries({model:'character',rig:'character',animation:'actions',actions:'actions',equipment:'equipment',weapons:'equipment',weapon:'equipment',sheet:'sheets',quality:'sheets',sheets:'sheets',sequence:'sequence'})){
+ if(pageFor({type})!==page)throw Error('Workspace route mismatch: '+type);
+}
+if(!deliveryTitle({id:'20261031-165024-copy',operation:{type:'compact'},renderer:'godot'}).startsWith('精简结果'))throw Error('Compression records must be distinguished from renders');
+`,context);
+
+vm.runInContext(`
+const groupsTest=sheetGroups({batches:[{id:'b',titles:{'idle.fbx':'Idle','attack.fbx':'Attack'}}],deliveries:[
+ {id:'new',batch:'b',clips:[{name:'idle'}]},
+ {id:'old',batch:'b',clips:[{name:'idle'},{name:'attack'}]},
+ {id:'sequence',kind:'sequence',clips:[{name:'idle'}]}
+]});
+if(groupsTest.length!==2||groupsTest[0].title!=='Attack'||groupsTest[1].title!=='Idle')throw Error('Sheets must be grouped and ordered by action');
+if(groupsTest[1].versions.map(v=>v.delivery.id).join(',')!=='new,old')throw Error('Action versions must retain exact record references and exclude sequence outputs');
+`,context);
