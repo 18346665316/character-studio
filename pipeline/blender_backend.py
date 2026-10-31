@@ -33,15 +33,17 @@ def assemble(bridge, frames, staging, size):
     if not clips: raise ValueError('Blender 未输出动画清单')
     for clip in clips:
         name=clip['name']
-        if Path(name).name!=name or not 8<=clip['frame_count']<=120:
+        if Path(name).name!=name or type(clip.get('frame_count')) is not int or clip['frame_count']<1:
             raise ValueError('Blender 动画清单无效')
-        sheet=Image.new('RGBA',(size*clip['frame_count'],size))
+        from sheet_layout import blank
+        sheet,cols,rows=blank(size,clip['frame_count'])
         for i in range(clip['frame_count']):
             with Image.open(frames/f'{name}_{i:03d}.png') as frame:
                 if frame.size!=(size,size): raise ValueError('Blender 帧尺寸不一致')
-                sheet.paste(frame.convert('RGBA'),(i*size,0))
+                sheet.paste(frame.convert('RGBA'),((i%cols)*size,(i//cols)*size))
         sheet.save(staging/f'{name}_spritesheet.png')
         timing=json.loads((frames/f'{name}_render.json').read_text())
         if timing.get('renderer')!='blender' or timing.get('frame_count')!=clip['frame_count'] or timing.get('duration_seconds')!=clip['duration_seconds']:
             raise ValueError('Blender 动画时序与输入不一致')
+        timing.update(columns=cols,rows=rows)
         (staging/f'{name}_render.json').write_text(json.dumps(timing,indent=2)+'\n')

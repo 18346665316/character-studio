@@ -20,9 +20,9 @@ from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence'}
+ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染'}
+          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简'}
 
 
 def now():
@@ -90,6 +90,11 @@ class Panel:
             self.hash_cache[key] = hashlib.sha256(path.read_bytes()).hexdigest()
         return self.hash_cache[key]
 
+    def game_clip(self, directory, info):
+        if not info:return None
+        return {'sheet':self.asset(directory/info['sheet']), 'gif':self.asset(directory/info['gif']),
+                'spriteframes':self.asset(directory/info['spriteframes']), 'info':info}
+
     def asset(self, path):
         return '/asset/' + quote(str(path.relative_to(self.root)), safe='/') if path.is_file() else None
 
@@ -111,7 +116,7 @@ class Panel:
         if parts[0] == 'deliverables':
             name(parts[2])
         path = self.scoped(relative, '/'.join(parts[:3]))
-        if path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.glb', '.fbx', '.zip', '.json') or not path.is_file():
+        if path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.glb', '.fbx', '.zip', '.json', '.tres') or not path.is_file():
             raise ValueError('文件不存在或不可预览')
         return path
 
@@ -200,10 +205,11 @@ class Panel:
                 continue
             deliveries.append({'id':manifest.parent.name, 'batch':info.get('source', {}).get('batch'),
                                'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
-                               'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
+                               'quality_report':info.get('quality_report'), 'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
                                'clips':[{'name':p.stem.replace('_preview',''), 'gif':self.asset(p),
                                          'sheet':self.asset(p.with_name(p.name.replace('_preview.gif','_spritesheet.png'))),
-                                         'info':info.get(p.name.replace('_preview.gif','_spritesheet.png'),{})}
+                                         'info':info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}),
+                                         'game':self.game_clip(manifest.parent,info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}).get('game'))}
                                         for p in sorted(manifest.parent.glob('*_preview.gif'))],
                                'export':'/api/export?character='+character+'&delivery='+manifest.parent.name})
         equipment = []
@@ -309,6 +315,11 @@ class Panel:
             if params.get('plan') and params['plan']!=plan:
                 raise ValueError('编排来源或武器设置已变化，请新建预览任务')
             clean={'recipe':plan['recipe'],'plan':plan}
+        if action == 'compact':
+            from compact_delivery import plan
+            clean=plan(self.root,character,params.get('delivery'),params.get('clips'))
+            if params.get('manifest_sha256') and clean!=params:
+                raise ValueError('原图集已变化，请重新创建精简任务')
         if action == 'weapon':
             path=self.scoped(params.get('image'),'.local/weapon-inputs')
             if not path.is_file() or path.name!='original.png': raise ValueError('请先导入武器原画')
@@ -498,9 +509,9 @@ class Panel:
             raise ValueError('交付目录无有效清单')
         buffer = BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
-            for path in directory.iterdir():
-                if path.is_file() and not path.is_symlink() and path.suffix in ('.png','.gif','.json'):
-                    archive.write(path,path.name)
+            for path in directory.rglob('*'):
+                if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(directory.resolve()) and path.suffix in ('.png','.gif','.json','.tres'):
+                    archive.write(path,str(path.relative_to(directory)))
         return buffer.getvalue()
 
 
@@ -546,7 +557,7 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':10,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':13,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):

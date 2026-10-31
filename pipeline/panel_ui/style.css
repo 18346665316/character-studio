@@ -11,3 +11,7 @@
 .sequence-track{display:flex;gap:6px;flex-wrap:wrap}.sequence-cue{font-size:12px;text-align:left;padding:7px 10px}.sequence-cue.playing{background:var(--soft);border-color:var(--accent)}
 
 .viewport-content:has(>.sequence-stage){overflow:hidden}.viewport-content>.sequence-stage{min-height:120px;flex:1;flex-shrink:1;overflow:hidden}.sequence-stage canvas{max-height:100%;object-fit:contain}
+.quality-card{border:1px solid var(--line);border-radius:7px;padding:14px}.quality-card h3{font-size:14px}.quality-card p{font-size:12px;margin:8px 0}.quality-card.failed{border-color:var(--red)}.quality-card.review{border-color:#c5aa72}
+
+/* Keep both comparison controls and the whole sprite visible on desktop. */
+@media(min-width:981px){.viewport-content>.sprite-stage{min-height:120px;flex:1;flex-shrink:1;position:relative;overflow:hidden}.sprite-stage canvas{position:absolute;inset:0;margin:auto;max-height:100%;max-width:100%;object-fit:contain}}

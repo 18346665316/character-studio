@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -158,31 +159,44 @@ def download(character, names, batch):
     return batch
 
 
-def validate_sheet(path, frame_size=128):
+def validate_sheet(path, frame_size=128, frame_count=None, allow_small=False):
     from PIL import Image
     import numpy as np
+    from sheet_layout import layout,tiles
     with Image.open(path) as source:
-        im = source.convert('RGBA')
-    if im.height != frame_size or im.width % frame_size or not 8 <= im.width // frame_size <= 120:
-        raise ValueError(f'{path.name}: 图集尺寸不符合 8–120 个 {frame_size}×{frame_size} 帧规范')
-    frames = [im.crop((x, 0, x + frame_size, frame_size)) for x in range(0, im.width, frame_size)]
-    for frame in frames:
-        box = frame.getchannel('A').getbbox()
-        if box is None:
-            raise ValueError(f'{path.name}: 存在透明空帧')
-        if box[0] <= 0 or box[1] <= 0 or box[2] >= frame_size or box[3] >= frame_size:
-            raise ValueError(f'{path.name}: 角色触及画布边缘，可能裁切')
-        if box[3] - box[1] < frame_size * 0.35:
-            raise ValueError(f'{path.name}: 角色在画面中过小')
-    unique = len({f.tobytes() for f in frames})
-    if unique < 2:
-        raise ValueError(f'{path.name}: 所有帧完全相同，拒绝作为动作交付')
-    pixels = np.array(im)
-    rgb = pixels[pixels[:, :, 3] > 200, :3].astype(float)
-    if len(rgb) == 0 or float(np.mean(rgb.max(axis=1) - rgb.min(axis=1))) < 8:
-        raise ValueError(f'{path.name}: 角色缺少可辨配色，疑似白模或灰模')
-    return {'frame_width': frame_size, 'frame_height': frame_size,
-            'frame_count': len(frames), 'unique_frames': unique, 'sha256': digest(path)}
+        im=source.convert('RGBA')
+    spec=layout(im,frame_size,frame_count)
+    unique=set();colorful=False;small=[];boxes=[];adjacent_duplicates=0;last_hash=None
+    first=None;last=None;areas=[];centers=[]
+    for i,frame in enumerate(tiles(im,frame_size,spec['frame_count'])):
+        box=frame.getchannel('A').getbbox()
+        if box is None:raise ValueError(f'{path.name}: 第 {i+1} 帧存在透明空帧')
+        if box[0]<=0 or box[1]<=0 or box[2]>=frame_size or box[3]>=frame_size:
+            raise ValueError(f'{path.name}: 第 {i+1} 帧角色触及画布边缘，可能裁切')
+        if box[3]-box[1]<frame_size*.35:small.append(i+1)
+        key=hashlib.sha256(frame.tobytes()).digest();unique.add(key)
+        adjacent_duplicates+=int(key==last_hash);last_hash=key
+        pixels=np.asarray(frame);mask=pixels[:,:,3]>200;rgb=pixels[mask,:3].astype(float)
+        if len(rgb) and float(np.mean(rgb.max(axis=1)-rgb.min(axis=1)))>=8:colorful=True
+        areas.append(int(mask.sum()));centers.append(((box[0]+box[2])/2,(box[1]+box[3])/2))
+        if first is None:first=mask.copy()
+        last=mask.copy();boxes.append(box)
+    if small and not allow_small:raise ValueError(f'{path.name}: 角色在画面中过小')
+    if len(unique)<2:raise ValueError(f'{path.name}: 所有帧完全相同，拒绝作为动作交付')
+    if not colorful:raise ValueError(f'{path.name}: 角色缺少可辨配色，疑似白模或灰模')
+    warnings=[]
+    if small:warnings.append({'code':'small_character','message':'部分帧人物占比偏小，请检查取景（蹲伏或跳跃也可能触发）','frames':small})
+    ratio=adjacent_duplicates/max(1,spec['frame_count']-1)
+    if ratio>.8:warnings.append({'code':'duplicate_frames','message':'超过 80% 相邻帧画面相同，请复核微小动作是否仍可见'})
+    shifts=[float(np.linalg.norm(np.asarray(b)-np.asarray(a))) for a,b in zip(centers,centers[1:])]
+    abrupt=[i+2 for i,shift in enumerate(shifts) if shift>frame_size*.25]
+    if abrupt:warnings.append({'code':'abrupt_displacement','message':'相邻帧轮廓中心位移超过画布 25%，请复核快速动作或异常跳位','frames':abrupt})
+    if max(areas)/max(1,min(areas))>3:warnings.append({'code':'coverage_change','message':'前景面积变化超过 3 倍，请复核姿态、装备切换或比例异常'})
+    seam=float(np.count_nonzero(first^last)/max(1,np.count_nonzero(first|last)))
+    return {**spec,'unique_frames':len(unique),'sha256':digest(path),
+        'quality':{'status':'review' if warnings else 'passed','warnings':warnings,
+        'metrics':{'adjacent_duplicate_ratio':ratio,'max_center_step_pixels':max(shifts,default=0),'foreground_area_ratio':max(areas)/max(1,min(areas))},
+        'loop':{'status':'review' if seam>.15 else 'unchecked','silhouette_endpoint_difference':seam,'message':'首尾轮廓差异较大，仅在需要循环时复核' if seam>.15 else '端点接近不代表速度连续，循环适用性仍需确认'}}}
 
 
 @track_failures
@@ -196,20 +210,45 @@ def prepare(character, render_preview=True):
     return prepared
 
 
-def make_preview(sheet, destination, duration_seconds):
+def make_preview(sheet, destination, duration_seconds, frame_size=None, frame_count=None, frame_durations=None):
     from PIL import Image
     image = Image.open(sheet).convert('RGBA')
-    frame_size = image.height
-    count = image.width // frame_size
+    from sheet_layout import layout,tiles
+    frame_size = frame_size or image.height
+    count = layout(image,frame_size,frame_count)["frame_count"]
     frames = []
-    for i in range(count):
+    for tile in tiles(image,frame_size,count):
         background = Image.new('RGBA', (frame_size, frame_size), '#e9edf0')
-        background.alpha_composite(image.crop((i * frame_size, 0, (i + 1) * frame_size, frame_size)))
+        background.alpha_composite(tile)
         frames.append(background.convert('RGB').resize((384, 384), Image.Resampling.NEAREST))
     # GIF timing is quantized to centiseconds. Distribute rounding to retain total duration.
-    ticks = duration_seconds * 100.0 / count
-    delays = [max(10, (round((i + 1) * ticks) - round(i * ticks)) * 10) for i in range(count)]
+    durations = frame_durations if frame_durations is not None else [duration_seconds/count]*count
+    if len(durations)!=count or any(not math.isfinite(v) or v<=0 for v in durations) or abs(sum(durations)-duration_seconds)>1e-6:
+        raise ValueError('逐帧时长与动作总时长不一致')
+    elapsed=0.;previous=0;delays=[]
+    for seconds in durations:
+        elapsed+=seconds*100;current=round(elapsed)
+        delays.append(max(10,(current-previous)*10));previous=current
     frames[0].save(destination, save_all=True, append_images=frames[1:], duration=delays, loop=0)
+
+
+def make_game_version(sheet, timing, quality, equipment_usage=None):
+    """Create a reusable game representation from an already finished pixel sheet."""
+    from compact_frames import compact,write_spriteframes
+    staging=sheet.parent;stem=sheet.name.removesuffix('_spritesheet.png')
+    game=staging/'game';game.mkdir(exist_ok=True)
+    protected=[]
+    for event in (equipment_usage or {}).get('clips',{}).get(stem,{}).get('events',[]):
+        index=math.ceil(event['at']*timing['frame_count']-1e-8)
+        protected.extend((max(0,index-1),min(timing['frame_count']-1,index)))
+    result=compact(sheet,game/sheet.name,timing,protected)
+    result['quality']=quality
+    result['sha256']=digest(game/sheet.name)
+    result.update(sheet='game/'+sheet.name,gif='game/'+stem+'_preview.gif',spriteframes='game/'+stem+'.tres')
+    (game/(stem+'_render.json')).write_text(json.dumps(result,indent=2)+'\n')
+    make_preview(game/sheet.name,staging/result['gif'],timing['duration_seconds'],timing['frame_width'],result['frame_count'],result['frame_durations_seconds'])
+    write_spriteframes(staging/result['spriteframes'],sheet.name,result)
+    return result
 
 
 @track_failures
@@ -286,31 +325,60 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         with (job / 'bake.log').open('w') as log:
             subprocess.run([GODOT, '--path', str(project), '--rendering-method', 'gl_compatibility',
                             '--log-file', str(job / 'render-engine.log'), '--', '--output', str(staging), '--view', view, '--frame-size', str(render_size)], stdout=log,
-                           stderr=subprocess.STDOUT, check=True, timeout=180)
+                           stderr=subprocess.STDOUT, check=True, timeout=1200)
     else:
         progress_update(character, 'render', 'Blender 正在测量姿态范围并渲染图集', job=str(job), batch=batch)
         from blender_backend import render
         render(BASE_DIR, project, staging, job, view, render_size, GODOT)
     progress_update(character, 'validate', '正在检查配色、空帧、裁切和时序，并生成预览', job=str(job), batch=batch)
     from pixel_finish import finish_batch
-    sheet_paths = [staging / f'{Path(name).stem}_spritesheet.png' for name in files]
-    # Inspect raw colors before quantization so a palette cannot conceal a lost material.
-    for sheet in sheet_paths:
-        validate_sheet(sheet, render_size)
-    pixel_settings = finish_batch(sheet_paths, frame_size=frame_size)
-    pixel_settings.update(render_size=render_size, supersample=supersample)
-    metadata = {'renderer': renderer, 'pixel_style': pixel_settings}
+    sheet_paths=[];timings={};results=[];rejected=job/'rejected'
+    def reject(name,reason):
+        rejected.mkdir(exist_ok=True)
+        for suffix in ('_spritesheet.png','_render.json','_preview.gif'):
+            path=staging/(Path(name).stem+suffix)
+            if path.exists():path.rename(rejected/path.name)
+        for suffix in ('_spritesheet.png','_render.json','_preview.gif','.tres'):
+            path=staging/'game'/(Path(name).stem+suffix)
+            if path.exists():
+                rejected.mkdir(exist_ok=True)
+                path.rename(rejected/('game_'+path.name))
+        results.append({'name':Path(name).stem,'status':'failed','reason':str(reason)})
     for name in files:
-        sheet = staging / f'{Path(name).stem}_spritesheet.png'
-        metadata[sheet.name] = validate_sheet(sheet, frame_size)
-        timing_path = staging / f'{Path(name).stem}_render.json'
-        timing = json.loads(timing_path.read_text())
-        if timing['frame_count'] != metadata[sheet.name]['frame_count'] or timing['duration_seconds'] <= 0:
-            raise ValueError('图集帧数和动作时长记录不一致')
-        timing.update(frame_width=frame_size, frame_height=frame_size, render_width=render_size)
-        timing_path.write_text(json.dumps(timing, indent=2) + '\n')
-        metadata[sheet.name].update(timing)
-        make_preview(sheet, staging / f'{Path(name).stem}_preview.gif', timing['duration_seconds'])
+        sheet=staging/f'{Path(name).stem}_spritesheet.png'
+        try:
+            timing=json.loads((staging/f'{Path(name).stem}_render.json').read_text())
+            count=timing['frame_count'];duration=timing['duration_seconds']
+            if type(count) is not int or count<1 or not isinstance(duration,(int,float)) or not math.isfinite(duration) or duration<=0:
+                raise ValueError('图集帧数和动作时长记录不一致')
+            validate_sheet(sheet,render_size,count,allow_small=True)
+            timings[sheet.name]={**timing,'frame_width':render_size}
+            sheet_paths.append(sheet)
+        except (ValueError,OSError,KeyError) as exc:reject(name,exc)
+    if not sheet_paths:
+        (job/'quality.json').write_text(json.dumps({'schema':1,'summary':{'passed':0,'review':0,'failed':len(results)},'results':results},ensure_ascii=False,indent=2))
+        raise ValueError('全部动作质量检查失败：'+'；'.join(r['reason'] for r in results))
+    pixel_settings=finish_batch(sheet_paths,frame_size=frame_size,layouts=timings)
+    pixel_settings.update(render_size=render_size,supersample=supersample)
+    metadata={'renderer':renderer,'pixel_style':pixel_settings}
+    for sheet in sheet_paths:
+        name=sheet.stem.replace('_spritesheet','')+'.fbx'
+        try:
+            timing=timings[sheet.name].copy()
+            info=validate_sheet(sheet,frame_size,timing['frame_count'],allow_small=True)
+            timing.update(frame_width=frame_size,frame_height=frame_size,render_width=render_size,columns=info['columns'],rows=info['rows'])
+            (staging/f'{Path(name).stem}_render.json').write_text(json.dumps(timing,indent=2)+'\n')
+            compact_info=make_game_version(sheet,timing,info['quality'],equipment_usage)
+            metadata[sheet.name]={**info,**timing,'game':compact_info}
+            make_preview(sheet,staging/f'{Path(name).stem}_preview.gif',timing['duration_seconds'],frame_size,timing['frame_count'])
+            results.append({'name':Path(name).stem,**info['quality'],'duration_seconds':timing['duration_seconds'],'frame_count':timing['frame_count'],'fps':timing.get('fps',timing['frame_count']/timing['duration_seconds']),'source_fps':timing.get('source_fps'),'game_frame_count':compact_info['frame_count']})
+        except (ValueError,OSError,KeyError) as exc:
+            metadata.pop(sheet.name,None);reject(name,exc)
+    counts={status:sum(r['status']==status for r in results) for status in ('passed','review','failed')}
+    metadata['quality_report']={'schema':1,'summary':counts,'results':results,'scope':'Automated structural and raster checks; artistic review remains necessary.'}
+    (job/'quality.json').write_text(json.dumps(metadata['quality_report'],ensure_ascii=False,indent=2))
+    if counts['passed']+counts['review']==0 or data.get('kind')=='sequence' and counts['failed']:
+        raise ValueError('动作质量检查失败：'+'；'.join(r['reason'] for r in results if r['status']=='failed'))
     if data.get('kind')=='sequence':
         cameras=[metadata[f'{Path(name).stem}_spritesheet.png'].get('camera') for name in files]
         if not cameras or not cameras[0] or any(camera!=cameras[0] for camera in cameras):
@@ -321,13 +389,13 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         metadata['equipment'] = {'id': equipment_id, 'config': equipment_config, 'usage':equipment_usage}
         (staging / 'equipment_usage.json').write_text(json.dumps(equipment_usage,indent=2))
         (staging / 'equipment.json').write_text(json.dumps(equipment_config, ensure_ascii=False, indent=2))
-    metadata['review'] = 'Automated checks passed; artistic quality and gameplay fit require visual review.'
+    metadata['review'] = 'Only clips passing hard checks are exported; inspect quality_report for review flags and rejected clips.'
     (staging / 'manifest.json').write_text(json.dumps(metadata, indent=2) + '\n')
     destination = BASE_DIR / 'deliverables' / character / job_id
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # Promotion is all-or-nothing; failed jobs remain under .local/jobs.
+    # Publish valid clips together; rejected raster assets stay in the local job.
     staging.rename(destination)
-    progress_update(character, 'complete', '图集与预览已生成；等待目视美术验收', status='complete', output=str(destination), job=str(job), batch=batch)
+    progress_update(character, 'complete', f'质检完成：通过 {counts["passed"]}，需复核 {counts["review"]}，失败 {counts["failed"]}；已保留可用动作', status='complete', output=str(destination), job=str(job), batch=batch)
     print(f'基础质量检查通过，交付目录: {destination}；美术效果仍需目视验收。')
     return destination
 

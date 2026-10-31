@@ -68,13 +68,15 @@ func run() -> void:
         var result := document.append_from_scene(character, state)
         if result == OK:
             result = document.write_to_filesystem(state, output.path_join(filename.get_basename() + ".glb"))
+        var timing: Dictionary = load("res://temporal_plan.gd").plan(player.get_animation(selected))
+        timing.merge({"usage":usage,"name":filename.get_basename()},true)
         character.queue_free()
         await process_frame
         if result != OK:
             push_error("Blender animation bridge failed: " + str(result))
             quit(1)
             return
-        clips.append({"usage":usage,"name": filename.get_basename(), "duration_seconds": duration, "frame_count": clampi(int(ceil(duration * 12.0)), 8, 120)})
+        clips.append(timing)
     var file := FileAccess.open(output.path_join("clips.json"), FileAccess.WRITE)
     file.store_string(JSON.stringify(clips))
     file.close()

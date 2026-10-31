@@ -4,7 +4,7 @@ extends Node
 var frame_size := 128
 var frame_count := 10
 var view := "three_quarter"
-var target_fps := 12.0
+var sampling := {}
 var preflight := true
 var shared_bounds := AABB()
 var has_shared_bounds := false
@@ -127,7 +127,8 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
         push_error("No usable animation: " + path)
         viewport.queue_free()
         return false
-    frame_count = clampi(int(ceil(length * target_fps)), 8, 120)
+    sampling = load("res://temporal_plan.gd").plan(player.get_animation(selected))
+    frame_count = int(sampling.frame_count)
     # Use restrained, texture-driven shading; tiny normal/highlight changes should not dominate.
     var material_nodes: Array[Node] = [character]
     while not material_nodes.is_empty():
@@ -199,7 +200,7 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     camera.look_at(center)
     print("Framing ", path, " bounds=", bounds)
     await RenderingServer.frame_post_draw
-    var sheet := Image.create(frame_size * frame_count, frame_size, false, Image.FORMAT_RGBA8)
+    var sheet := Image.create(frame_size * int(sampling.columns), frame_size * int(sampling.rows), false, Image.FORMAT_RGBA8)
     for i in range(frame_count):
         player.seek(float(i) / frame_count * length, true)
         if not usage.is_empty(): equipment_helper.usage_apply(equipment_mounts,usage,asset_name,float(i)/frame_count)
@@ -211,16 +212,18 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
             viewport.queue_free()
             return false
         frame.convert(Image.FORMAT_RGBA8)
-        sheet.blit_rect(frame, Rect2i(0, 0, frame_size, frame_size), Vector2i(i * frame_size, 0))
+        sheet.blit_rect(frame, Rect2i(0, 0, frame_size, frame_size), Vector2i((i % int(sampling.columns)) * frame_size, int(i / int(sampling.columns)) * frame_size))
     var error := sheet.save_png(output.path_join(asset_name + "_spritesheet.png"))
     viewport.queue_free()
     var metadata := FileAccess.open(output.path_join(asset_name + "_render.json"), FileAccess.WRITE)
     if metadata == null:
         return false
-    metadata.store_string(JSON.stringify({"duration_seconds": length, "frame_count": frame_count,
+    var timing: Dictionary = sampling.duplicate()
+    timing.merge({"duration_seconds": length, "frame_count": frame_count,
         "fps": float(frame_count) / length, "clip": selected, "view": view,
         "camera": {"size": camera.size, "center": [center.x,center.y,center.z], "view": view},
-        "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, "  "))
+        "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, true)
+    metadata.store_string(JSON.stringify(timing, "  "))
     metadata.close()
     if error != OK:
         push_error("Could not save sprite sheet: " + str(error))

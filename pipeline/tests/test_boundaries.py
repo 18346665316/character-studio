@@ -79,7 +79,7 @@ class Boundaries(unittest.TestCase):
     def test_only_selected_batch_published_with_manifest(self):
         with patch.object(studio.subprocess, 'run', side_effect=self.renderer()):
             destination = studio.bake('hero', 'run1')
-        self.assertEqual(sorted(p.name for p in destination.iterdir()), ['manifest.json', 'run_preview.gif', 'run_render.json', 'run_spritesheet.png'])
+        self.assertEqual(sorted(p.name for p in destination.iterdir()), ['game', 'manifest.json', 'run_preview.gif', 'run_render.json', 'run_spritesheet.png'])
         manifest = json.loads((destination / 'manifest.json').read_text())
         self.assertEqual(list(manifest['source']['files']), ['run.fbx'])
 
@@ -114,7 +114,25 @@ class Boundaries(unittest.TestCase):
             with self.assertRaises(ValueError):
                 studio.bake('hero', 'run1')
         self.assertFalse((self.root / 'deliverables').exists())
-        self.assertEqual(len(list((self.root / '.local/jobs').glob('*/staging/*.png'))), 1)
+        self.assertEqual(len(list((self.root / '.local/jobs').glob('*/rejected/*.png'))), 1)
+
+    def test_bad_clip_is_isolated_without_discarding_valid_sibling(self):
+        receipt=studio.workspace('hero')/'animations/run1/batch.json'
+        data=json.loads(receipt.read_text());source=receipt.parent/'bad.fbx';source.write_bytes(b'fixture-bad')
+        data['files']['bad.fbx']=studio.digest(source);receipt.write_text(json.dumps(data))
+        def renderer(args,**kwargs):
+            if '--output' in args:
+                output=Path(args[args.index('--output')+1])
+                for name,blank in [('run',False),('bad',True)]:
+                    sheet(output/(name+'_spritesheet.png'),blank=blank)
+                    (output/(name+'_render.json')).write_text(json.dumps({'duration_seconds':1.0,'frame_count':10,'fps':10}))
+        with patch.object(studio.subprocess,'run',side_effect=renderer):destination=studio.bake('hero','run1')
+        meta=json.loads((destination/'manifest.json').read_text())
+        self.assertEqual(meta['quality_report']['summary'],{'passed':1,'review':0,'failed':1})
+        self.assertTrue((destination/'run_preview.gif').is_file())
+        self.assertFalse((destination/'bad_spritesheet.png').exists())
+        self.assertFalse((destination/'bad_preview.gif').exists())
+        self.assertEqual(len(list((self.root/'.local/jobs').glob('*/rejected/bad_spritesheet.png'))),1)
 
     def test_renderer_failure_never_published(self):
         with patch.object(studio.subprocess, 'run', side_effect=self.renderer(fail=True)):

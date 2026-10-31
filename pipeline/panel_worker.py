@@ -99,6 +99,9 @@ def execute(job, persist):
     elif action == 'review':
         from review_character import review
         outputs['review'] = str(review(character, params['batch'], capture_only=True).relative_to(studio.BASE_DIR))
+    elif action == 'compact':
+        from compact_delivery import run
+        outputs['delivery']=str(run(studio.BASE_DIR,character,params))
     elif action == 'sequence':
         from sequence_render import render
         outputs['sequence_preview']=render(studio.BASE_DIR,character,params['plan'])
@@ -129,8 +132,13 @@ def main():
         job.update(status='succeeded', finished_at=stamp())
     except BaseException as exc:
         traceback.print_exc()
+        if job['action'] in ('bake','sequence'):
+            progress=studio.progress_read(job['character']) or {}
+            quality_path=Path(progress.get('job',''))/'quality.json'
+            if quality_path.is_file() and quality_path.resolve().is_relative_to((studio.BASE_DIR/'.local/jobs').resolve()):
+                job['quality_report']=json.loads(quality_path.read_text())
         job.update(status='failed', error=str(exc), finished_at=stamp())
-        failure_stage={'reconstruct':'reconstruction','prepare':'prepare','rig':'rig','download':'download','review':'review','equipment':'equipment','bake':'render','sequence':'render','weapon':'weapon'}.get(job['action'],'validate')
+        failure_stage={'reconstruct':'reconstruction','prepare':'prepare','rig':'rig','download':'download','review':'review','equipment':'equipment','bake':'render','sequence':'render','compact':'validate','weapon':'weapon'}.get(job['action'],'validate')
         studio.progress_update(job['character'], failure_stage, str(exc), status='failed')
     finally:
         save(path, job)

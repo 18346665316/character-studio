@@ -222,9 +222,14 @@ class PanelTests(unittest.TestCase):
         atomic(target/'manifest.json',{'source':{'character':'hero'}})
         (target/'idle_spritesheet.png').write_bytes(b'png')
         (target/'not_an_asset.txt').write_text('private')
+        (target/'game').mkdir()
+        (target/'game/idle_spritesheet.png').write_bytes(b'png')
+        (target/'game/idle.tres').write_text('[gd_resource]')
+        self.assertEqual(self.panel.asset_path('deliverables/hero/job1/game/idle.tres'),target/'game/idle.tres')
+        (target/'game/private.txt').write_text('private')
         data=self.panel.export('hero','job1')
         with zipfile.ZipFile(BytesIO(data)) as archive:
-            self.assertEqual(set(archive.namelist()),{'manifest.json','idle_spritesheet.png'})
+            self.assertEqual(set(archive.namelist()),{'manifest.json','idle_spritesheet.png','game/idle_spritesheet.png','game/idle.tres'})
 
 class PanelHTTPTests(unittest.TestCase):
     @classmethod

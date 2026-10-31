@@ -10,9 +10,24 @@ function sequenceRecipe(draft){const s=draft.renderSettings;return {sources:[...
 function sequencePreviewOptions(c,draft,options){
  const preview=c.sequence_preview;if(!preview||JSON.stringify(preview.recipe)!==JSON.stringify(sequenceRecipe(draft)))return null;
  const delivery=c.deliveries.find(d=>d.id===preview.delivery);if(!delivery)return null;
- const mapped=options.map(o=>({...o,delivery,item:delivery.clips.find(i=>i.name===preview.clips[o.id])}));
+ const mapped=options.map(o=>({...o,delivery,item:gameItem(delivery.clips.find(i=>i.name===preview.clips[o.id])||{})}));
  return draft.segments.every(s=>mapped.some(o=>o.id===s.delivery+'/'+s.clip&&o.item?.sheet))?mapped:null;
 }
+// One timing model for uniform legacy sheets and variable-duration game sheets.
+function clipTiming(info){
+ const n=Number(info.frame_count),fps=Number(info.fps)||n/Number(info.duration_seconds)||12;
+ const durations=info.frame_durations_seconds||Array.from({length:n},()=>1/fps);
+ if(!Number.isInteger(n)||n<1||durations.length!==n||durations.some(v=>!Number.isFinite(v)||v<=0))throw Error('逐帧时长无效');
+ const starts=[0];for(const d of durations)starts.push(starts.at(-1)+d);
+ if(info.duration_seconds&&Math.abs(starts.at(-1)-Number(info.duration_seconds))>1e-5)throw Error('逐帧时长与总时长不符');
+ return {starts,duration:starts.at(-1)};
+}
+function heldFrameAt(timing,time){
+ let lo=0,hi=timing.starts.length-1;
+ while(lo+1<hi){const mid=(lo+hi)>>1;if(timing.starts[mid]<=time)lo=mid;else hi=mid;}
+ return lo;
+}
+function gameItem(item){return item.game?{...item,...item.game,name:item.name}:item;}
 function buildSequence(segments,options){
  let count=0,duration=0;const spans=[];
  for(const [index,segment]of segments.entries()){
@@ -20,14 +35,14 @@ function buildSequence(segments,options){
   if(!source)throw Error(`第 ${index+1} 段的图集已不存在，请移除或重新选择。`);
   const info=source.item.info,n=Number(info.frame_count),w=Number(info.frame_width),h=Number(info.frame_height),fps=Number(info.fps)||n/Number(info.duration_seconds)||12;
   if(!Number.isInteger(n)||n<1||!(w>0&&h>0&&fps>0)||!Number.isInteger(segment.repeat)||segment.repeat<1||segment.repeat>20||!(segment.speed>=.25&&segment.speed<=4))throw Error(`第 ${index+1} 段的帧信息或播放设置无效。`);
-  const frames=n*segment.repeat,seconds=frames/(fps*segment.speed);
-  spans.push({source,index,start:count,end:count+frames,time:duration,until:duration+seconds,n,w,h,fps:fps*segment.speed});count+=frames;duration+=seconds;
+  const timing=clipTiming(info),frames=n*segment.repeat,seconds=timing.duration*segment.repeat/segment.speed;
+  spans.push({source,index,start:count,end:count+frames,time:duration,until:duration+seconds,n,w,h,timing,speed:segment.speed,fps:fps*segment.speed});count+=frames;duration+=seconds;
  }
  return {spans,count,duration};
 }
 function sequenceFrame(plan,frame){const span=plan.spans.find(s=>frame<s.end)||plan.spans.at(-1);return {span,local:(frame-span.start)%span.n};}
-function sequenceTime(plan,frame){const {span}=sequenceFrame(plan,frame);return span.time+(frame-span.start)/span.fps;}
-function sequenceFrameAt(plan,time){const s=plan.spans.find(s=>time<s.until)||plan.spans.at(-1);return Math.min(s.end-1,s.start+Math.floor(Math.max(0,time-s.time)*s.fps));}
+function sequenceTime(plan,frame){const {span}=sequenceFrame(plan,frame);const offset=frame-span.start;return span.time+(Math.floor(offset/span.n)*span.timing.duration+span.timing.starts[offset%span.n])/span.speed;}
+function sequenceFrameAt(plan,time){const s=plan.spans.find(s=>time<s.until)||plan.spans.at(-1);const elapsed=Math.max(0,time-s.time)*s.speed,cycle=Math.floor(elapsed/s.timing.duration);return Math.min(s.end-1,s.start+cycle*s.n+heldFrameAt(s.timing,elapsed-cycle*s.timing.duration));}
 function renderSequence(c){
  setTitles('SEQUENCE','动作编排','编排设置');const controls=$('controls'),content=$('preview-content'),draft=sequenceDraft(c),options=sequenceOptions(c);
  const changed=()=>{remember();renderWorkspace(true);};
