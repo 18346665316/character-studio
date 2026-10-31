@@ -43,6 +43,14 @@ def execute(job, persist):
         outputs['prepared'] = str(studio.prepare(character).relative_to(studio.BASE_DIR))
     elif action == 'prepare':
         outputs['prepared'] = str(studio.prepare(character).relative_to(studio.BASE_DIR))
+    elif action == 'optimize':
+        from model_optimization import optimize
+        studio.progress_update(character,'prepare','Blender 正在生成减面候选与四视图对照；当前绑定保持不变')
+        outputs['optimization']=str(optimize(studio.BASE_DIR,character,params['prepared'],params['fingerprint']).relative_to(studio.BASE_DIR))
+    elif action == 'adopt_model':
+        from model_optimization import activate
+        outputs['prepared']=str(activate(studio.BASE_DIR,character,params['experiment'],params['variant']).relative_to(studio.BASE_DIR))
+        studio.progress_update(character,'review','已采用优化版本，请重新确认模型外观并进行骨骼绑定')
     elif action == 'rig':
         studio.rig(character)
     elif action == 'download':

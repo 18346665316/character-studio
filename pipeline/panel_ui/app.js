@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const actionNames={reconstruct:'生成模型与贴图',prepare:'准备贴图',rig:'骨骼绑定',download:'导入动画',review:'生成姿态检查',bake:'渲染图集',equipment:'调整武器挂点',weapon:'独立武器重建',sequence:'编排统一渲染',compact:'图集精简'};
+const actionNames={optimize:'模型减面对比',adopt_model:'采用优化模型',reconstruct:'生成模型与贴图',prepare:'准备贴图',rig:'骨骼绑定',download:'导入动画',review:'生成姿态检查',bake:'渲染图集',equipment:'调整武器挂点',weapon:'独立武器重建',sequence:'编排统一渲染',compact:'图集精简'};
 const statusNames={queued:'排队中',running:'执行中',succeeded:'已完成',failed:'失败',interrupted:'已中断'};
 let state=null,selected=localStorage.getItem('studio-character')||'',token='',busy=false,refreshId=0,refreshing=false,viewKey='',selection={type:'model'},logTask='',draft=[],animationFrame=0,player=null,uploadUrl;
 let preferences={};try{preferences=JSON.parse(localStorage.getItem('studio-preferences')||'{}');}catch{}
@@ -21,7 +21,7 @@ function notify(text,error=false){$('notice').hidden=false;$('notice').className
 function isRunning(j){return ['queued','running'].includes(j.status);}
 function active(){return state?.jobs.some(isRunning);}
 function blocked(){return busy||active();}
-function readyServer(){return state?.api_version>=14;}
+function readyServer(){return state?.api_version>=15;}
 function ownJobs(){return state.jobs.filter(j=>j.character===selected);}
 function rendererName(value){return value==='blender'?'Blender · Eevee':'Godot';}
 function usageSummary(usage,clip){if(!usage)return '手持';const action=usage.clips?.[clip]||{};const initial=action.initial&&action.initial!=='inherit'?action.initial:usage.default||'hand';return [usageLabels[initial],...(action.events||[]).map(e=>`${Math.round(e.at*100)}% → ${usageLabels[e.state]}`)].join(' · ');}
@@ -62,7 +62,7 @@ function resourceSection(title,add){const s=node('section',undefined,'resource-s
 function setTitles(kind,title,inspector){$('preview-kind').textContent=kind;$('preview-title').textContent=title;$('control-title').textContent=inspector;}
 function renderModel(c){setTitles('MODEL','模型与贴图','模型属性');const content=$('preview-content'),controls=$('controls'),p=prefs();if(!c.inputs.some(i=>i.path===p.image))p.image=c.inputs[0]?.path||'';
  controls.append(field('来源原画',select(c.inputs.map((i,index)=>[i.path,`原画 ${c.inputs.length-index} · ${sourceTime(i.path.split('/').at(-2))}`]),p.image,v=>{p.image=v;remember();renderWorkspace(true);})),button('导入另一张原画',()=>openUpload(c.id),'full',blocked()));
- if(c.prepared){content.append(stageImage(c.prepared.contact,'人物多角度模型检查图'));controls.append(properties([['三角面',c.prepared.info.triangles_after],['贴图尺寸',c.prepared.info.texture_resolution],['外观状态',c.model_approved?'已确认':'待检查']]));controls.append(button(c.model_approved?'✓ 模型外观已确认':'确认模型外观',()=>mutation('/api/approve',{character:selected,kind:'model',fingerprint:c.prepared.fingerprint}),'primary full',blocked()||c.model_approved));controls.append(note('检查四肢分离、背面和悬浮碎片。确认只对应当前模型。'));if(c.model_approved&&!c.rig.ready)controls.append(button('设置骨骼绑定',()=>choose({type:'rig'}),'full'));controls.append(link('下载模型 GLB',c.prepared.glb));const advanced=details('重新生成与贴图',button('用所选原画重新生成',()=>start('reconstruct',{image:p.image}),'full',blocked()||!p.image),button('重新准备贴图',()=>start('prepare'),'full',blocked()),note('更新模型后需要重新确认外观和绑定，历史导出保留。'));controls.append(advanced);if(p.image)content.append(details('查看来源原画',stageImage(c.inputs.find(i=>i.path===p.image).url,'所选原画')));$('viewport-note').textContent='当前显示已生成的多角度检查图。';}
+ if(c.prepared){content.append(stageImage(c.prepared.contact,'人物多角度模型检查图'));controls.append(properties([['三角面',c.prepared.info.triangles_after],['贴图尺寸',c.prepared.info.texture_resolution],['外观状态',c.model_approved?'已确认':'待检查']]));controls.append(button(c.model_approved?'✓ 模型外观已确认':'确认模型外观',()=>mutation('/api/approve',{character:selected,kind:'model',fingerprint:c.prepared.fingerprint}),'primary full',blocked()||c.model_approved));controls.append(note('检查四肢分离、背面和悬浮碎片。确认只对应当前模型。'));if(c.model_approved&&!c.rig.ready)controls.append(button('设置骨骼绑定',()=>choose({type:'rig'}),'full'));controls.append(link('下载模型 GLB',c.prepared.glb));renderModelOptimization(c,controls);const advanced=details('重新生成与贴图',button('用所选原画重新生成',()=>start('reconstruct',{image:p.image}),'full',blocked()||!p.image),button('重新准备贴图',()=>start('prepare'),'full',blocked()),note('更新模型后需要重新确认外观和绑定，历史导出保留。'));controls.append(advanced);if(p.image)content.append(details('查看来源原画',stageImage(c.inputs.find(i=>i.path===p.image).url,'所选原画')));$('viewport-note').textContent='当前显示已生成的多角度检查图。';}
  else{const input=c.inputs.find(i=>i.path===p.image);content.append(input?stageImage(input.url,'人物原画'):placeholder('导入一张人物原画','全身立姿、轮廓简洁、四肢与躯干分离。'));controls.append(button('生成模型与贴图',()=>start('reconstruct',{image:p.image}),'primary full',blocked()||!p.image),note('生成完成后在这里检查模型，再设置骨骼绑定。'));}
 }
 function renderRig(c){setTitles('RIG','骨骼绑定','绑定属性');const controls=$('controls'),content=$('preview-content');content.append(c.prepared?stageImage(c.prepared.contact,'待绑定模型'):placeholder('先准备模型','生成模型并确认外观后，才能绑定骨骼。'));controls.append(node('div',c.rig.ready?'✓ 当前模型骨骼绑定可用':c.rig.status==='needs_review'?'Mixamo 人物需要重新确认':'尚未完成绑定',c.rig.ready?'approval-state':'callout'));if(c.rig.error)controls.append(note(c.rig.error));controls.append(button(c.rig.ready?'重新打开 Mixamo 绑定':'打开 Mixamo 绑定',()=>start('rig'),'primary full',blocked()||!c.model_approved),note('1. 在弹出的 Mixamo 窗口登录并放置关节点。\n2. 检查关节变形。\n3. 点击 Mixamo 左下角的 Studio 确认。'));if(!c.model_approved)controls.append(button('前往检查模型',()=>choose({type:'model'}),'full'));if(c.rig.ready)controls.append(button('＋ 添加动画',openAdd,'full'));$('viewport-note').textContent='关节点标注在 Mixamo 窗口完成；执行状态可在下方任务栏查看。';}
@@ -168,4 +168,16 @@ function renderQuality(c){
  if(r.game_frame_count)card.append(note(`游戏精简版：${r.frame_count} → ${r.game_frame_count} 帧，时长不变`));if(r.loop?.status==='review')card.append(note('循环复核：'+r.loop.message));if(r.frame_count)card.append(note(`${Number(r.duration_seconds).toFixed(2)} 秒 · ${r.frame_count} 帧 · ${Number(r.fps).toFixed(2)} FPS${r.source_fps?' · 源关键帧约 '+Number(r.source_fps).toFixed(2)+' FPS':''}`));
  const clip=delivery.clips.find(i=>i.name===r.name);if(clip)card.append(button('查看动画',()=>{prefs().previewDelivery=delivery.id;prefs().animationView='sprite';if(delivery.kind==='sequence')choose({type:'sequence'});else choose({type:'sheet',delivery:delivery.id,clip:r.name});},''));else card.append(note('失败图集已隔离，未加入交付文件。请检查原因后重新生成。'));content.append(card);}
  $('viewport-note').textContent='异常来自自动规则，快速攻击、蹲伏、武器显隐也可能触发需复核提示。不会自动修改原动作。';
+}
+
+function renderModelOptimization(c,controls){
+ const box=node('div',undefined,'usage-editor');box.append(node('h3','模型优化 · Blender'),note('保留原版，比较约 3 万面与 1.5 万面候选。只检查静态画面，不保证关节变形；采用后需重新验收与绑定。'));
+ box.append(button('生成减面对照',()=>start('optimize',{fingerprint:c.prepared.fingerprint}),'full',blocked()||state.api_version<15));
+ const experiment=c.optimizations?.[0];if(experiment){
+  box.append(image(experiment.comparison,'原版与减面候选四视图对比'),note('从上到下：'+experiment.report.variants.map(v=>v.id==='original'?'原版':v.triangles.toLocaleString()+' 面').join('、')+'。候选仍待外观及新绑定动作验收。'));for(const size of [64,128])if(experiment.pixel_comparisons?.[size])box.append(button('查看 '+size+'px 对照',()=>{$('large-preview').src=experiment.pixel_comparisons[size];$('large-preview').alt=size+'px 减面对照';$('image-dialog').showModal();},'full'));box.append(link('下载优化评估清单',experiment.report_url));
+  for(const variant of experiment.variants){const active=c.prepared.info.optimization?.experiment===experiment.id&&String(c.prepared.info.optimization?.target)===variant.id;
+   const metric=experiment.report.variants.find(v=>v.id===variant.id)?.metrics?.['64'];if(metric)box.append(note('64px 四视图最低轮廓重合度：'+(metric.minimum_silhouette_iou*100).toFixed(2)+'%'));box.append(node('strong',variant.triangles.toLocaleString()+' 三角面'),link('下载候选 GLB',variant.glb),button(active?'当前使用此版本':'采用此版本（需重新绑定）',()=>start('adopt_model',{experiment:experiment.id,variant:variant.id}),'full',blocked()||active||state.api_version<15));
+  }
+ }
+ controls.append(box);
 }

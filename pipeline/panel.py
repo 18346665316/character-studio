@@ -20,9 +20,9 @@ from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact'}
+ACTIONS = {'optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简'}
+          'optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简'}
 
 
 def now():
@@ -166,6 +166,13 @@ class Panel:
                             'contact': self.asset(path.parent / 'previews/contact_sheet.png'),
                             'glb': self.asset(path.parent / 'preview.glb')}
                 break
+        optimizations=[]
+        for report_path in files('models/optimizations/*/report.json'):
+            report=read(report_path,{})
+            if model.is_file() and report.get('source_sha256')==self.digest(model):
+                optimizations.append({'id':report_path.parent.name,'report':report,'comparison':self.asset(report_path.parent/'comparison.png'),
+                                      'report_url':self.asset(report_path),'pixel_comparisons':{str(size):self.asset(report_path.parent/f'comparison_{size}.png') for size in (64,128)},
+                                      'variants':[{'id':v['id'],'triangles':v['triangles'],'glb':self.asset(report_path.parent/v['id']/'preview.glb')} for v in report.get('variants',[]) if v['id']!='original']})
         state = read(self.root / '.local/mixamo' / character / 'state.json', {'status':'unbound'})
         rig_ready = False
         from mixamo_state import cloud_recoverable
@@ -241,7 +248,7 @@ class Panel:
                 'equipment':equipment, 'reviews':reviews[:12], 'deliveries':deliveries, 'approvals':approvals,
                 'sequence_preview':read(self.scoped(f'workspaces/{character}/sequence_preview.json',f'workspaces/{character}'),None),
                 'sequence':read(self.scoped(f'workspaces/{character}/sequence.json',f'workspaces/{character}'), None),
-                'model_approved':model_ok,
+                'model_approved':model_ok, 'optimizations':optimizations,
                 'progress':read(self.root / '.local/progress' / (character+'.json'))}
 
     def catalog(self):
@@ -331,6 +338,15 @@ class Panel:
             if not path.is_file() or path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
                 raise ValueError('请先上传原画')
             clean['image'] = str(path.relative_to(self.root))
+        if action == 'optimize':
+            if not c['prepared']:raise ValueError('请先准备带贴图模型')
+            clean={'prepared':c['prepared']['id'],'fingerprint':c['prepared']['fingerprint']}
+            if params.get('fingerprint') and params['fingerprint']!=clean['fingerprint']:raise ValueError('当前模型已变化')
+        if action == 'adopt_model':
+            experiment=name(params.get('experiment'));variant=name(params.get('variant'))
+            match=next((o for o in c['optimizations'] if o['id']==experiment),None)
+            if not match or variant not in [v['id'] for v in match['variants']]:raise ValueError('优化候选已失效')
+            clean={'experiment':experiment,'variant':variant}
         if action == 'prepare' and not c['has_model']:
             raise ValueError('请先生成模型')
         if action == 'rig' and not c['model_approved']:
@@ -561,7 +577,7 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':14,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':15,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
