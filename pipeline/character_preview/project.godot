@@ -1,0 +1,17 @@
+config_version=5
+
+[application]
+config/name="Studio · 人物检查"
+run/main_scene="res://review.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+
+[display]
+window/size/viewport_width=1400
+window/size/viewport_height=900
+window/size/window_width_override=1200
+window/size/window_height_override=772
+window/stretch/mode="canvas_items"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+anti_aliasing/quality/msaa_3d=2

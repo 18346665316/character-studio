@@ -1,0 +1,34 @@
+/* Run with Node: node pipeline/tests/test_editor_ui.cjs */
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const elements = new Map();
+const document = {getElementById(id) {if (!elements.has(id)) elements.set(id,{});return elements.get(id);}};
+const context = vm.createContext({document,localStorage:{getItem(){return null;}},requestAnimationFrame(){return 1;},cancelAnimationFrame(){},performance:{now(){return 0;}},console});
+const source = fs.readFileSync(path.join(__dirname,'../panel_ui/app.js'),'utf8').replace('refresh(true);setInterval(()=>refresh(),2500);','');
+vm.runInContext(source,context);
+vm.runInContext(`
+const old={id:'old',current_rig:false,files:['jogging.fbx'],fingerprint:'old-fp'};
+const current={id:'current',current_rig:true,files:['jogging.fbx','idle.fbx'],fingerprint:'new-fp',hashes:{'jogging.fbx':'j','idle.fbx':'i'},titles:{'jogging.fbx':'Jogging'}};
+const c={batches:[old,current],approvals:{animations:{current:{'jogging.fbx':{fingerprint:'new-fp'}}}},reviews:[],equipment:[]};
+const resources=animationResources(c);
+if(resources.length!==2||resources[0].batch.id!=='current'||resources[0].versions.length!==2)throw Error('Current rig must win over historical same-named animation');
+if(animationTitle(current,'jogging.fbx')!=='Jogging')throw Error('Original title must be preserved');
+if(!animationApproved(c,current,'jogging.fbx')||animationApproved(c,current,'idle.fbx')||animationApproved(c,old,'jogging.fbx')||batchApproved(c,current))throw Error('Approval leaked to sibling or old source');
+c.approvals.animations.current['idle.fbx']={fingerprint:'new-fp'};
+if(!batchApproved(c,current))throw Error('Fully reviewed source must export');
+c.reviews=[{batch:'current',files:{'idle.fbx':'i','jogging.fbx':'changed'}}];
+if(reviewFor(c,current))throw Error('Stale review must be rejected');
+c.reviews[0].files['jogging.fbx']='j';
+if(!reviewFor(c,current))throw Error('Hash matching must ignore object key ordering');
+selection={type:'animation',key:'jogging',version:'old/jogging.fbx'};
+if(chosenAnimation(c).batch.id!=='old'||chosenBatch(c).id!=='old')throw Error('Explicit history selection must retain exact source');
+let drawArgs;
+const p={frame:5,count:12,w:64,h:64,img:{naturalWidth:256,naturalHeight:192},ctx:{clearRect(){},drawImage(...args){drawArgs=args;}}};
+drawFrame(p);
+if(drawArgs[1]!==64||drawArgs[2]!==64||document.getElementById('timeline').value!==5)throw Error('Timeline must address the correct grid cell');
+`,context);
+assert.equal(elements.get('frame-label').textContent,'6 / 12');
+module.exports={passed:8};
+if(require.main===module)console.log('Editor resource, approval, provenance and timeline checks passed');

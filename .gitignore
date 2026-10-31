@@ -1,0 +1,15 @@
+# Local runtimes, credentials, browser profiles, tasks and caches
+.local/
+.env
+.env.*
+!.env.example
+
+# User inputs and generated character assets
+/workspaces/
+/deliverables/
+
+# Generated editor/import and Python files
+**/.godot/
+**/__pycache__/
+*.py[cod]
+.DS_Store

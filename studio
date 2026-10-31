@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_EXEC="$BASE_DIR/.local/python/bin/python3"
+if [ ! -x "$PYTHON_EXEC" ]; then
+    echo "Python environment missing: $PYTHON_EXEC" >&2
+    exit 1
+fi
+exec "$PYTHON_EXEC" "$BASE_DIR/pipeline/studio_core.py" "$@"

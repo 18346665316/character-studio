@@ -1,0 +1,15 @@
+config_version=5
+
+[application]
+config/name="Pixel Studio Baker"
+run/main_scene="res://baker.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[display]
+window/size/viewport_width=128
+window/size/viewport_height=128
+window/size/resizable=false
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
