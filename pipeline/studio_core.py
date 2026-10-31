@@ -183,8 +183,8 @@ def validate_sheet(path, frame_size=128, frame_count=None, allow_small=False):
         last=mask.copy();boxes.append(box)
     if small and not allow_small:raise ValueError(f'{path.name}: 角色在画面中过小')
     if len(unique)<2:raise ValueError(f'{path.name}: 所有帧完全相同，拒绝作为动作交付')
-    if not colorful:raise ValueError(f'{path.name}: 角色缺少可辨配色，疑似白模或灰模')
     warnings=[]
+    if not colorful:warnings.append({'code':'low_saturation','message':'画面色彩饱和度低，请复核是否符合原画；黑白或灰度画风可正常使用，贴图缺失由源模型检查判断'})
     if small:warnings.append({'code':'small_character','message':'部分帧人物占比偏小，请检查取景（蹲伏或跳跃也可能触发）','frames':small})
     ratio=adjacent_duplicates/max(1,spec['frame_count']-1)
     if ratio>.8:warnings.append({'code':'duplicate_frames','message':'超过 80% 相邻帧画面相同，请复核微小动作是否仍可见'})

@@ -65,6 +65,12 @@ class SheetLayoutTests(unittest.TestCase):
         self.assertEqual(result['quality']['loop']['status'],'review')
         self.assertNotEqual(result['quality']['status'],'failed')
 
+    def test_grayscale_detail_is_reviewable_not_rejected(self):
+        path=self.sheet(2);im=Image.open(path).convert('LA').convert('RGBA');im.save(path)
+        result=validate_sheet(path,64,2)
+        self.assertEqual(result['quality']['status'],'review')
+        self.assertIn('low_saturation',[w['code'] for w in result['quality']['warnings']])
+
     def test_blender_assembly_accepts_more_than_120_frames(self):
         count=121;clip={'name':'idle','frame_count':count,'duration_seconds':count/30}
         (self.root/'clips.json').write_text(json.dumps([clip]));(self.root/'idle_render.json').write_text(json.dumps({**clip,'renderer':'blender'}))

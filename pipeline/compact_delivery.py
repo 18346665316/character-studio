@@ -42,16 +42,30 @@ def run(root,character,pinned):
         if studio.digest(source)!=pinned['sheet_sha256'][filename]:raise ValueError('原图集在读取期间已变化')
         shutil.copy2(source,staging/filename)
         if studio.digest(staging/filename)!=pinned['sheet_sha256'][filename]:raise ValueError('图集复制期间发生变化')
-        quality=studio.validate_sheet(staging/filename,original['frame_width'],original['frame_count'],allow_small=True)['quality']
-        timing={k:v for k,v in original.items() if k not in ('game','quality','sha256','unique_frames')}
-        timing.setdefault('fps',timing['frame_count']/timing['duration_seconds'])
-        game=studio.make_game_version(staging/filename,timing,quality,(data.get('equipment') or {}).get('usage'))
-        result[filename]={**original,'game':game}
-        atomic(staging/(clip+'_render.json'),timing)
-        studio.make_preview(staging/filename,staging/(clip+'_preview.gif'),timing['duration_seconds'],timing['frame_width'],timing['frame_count'])
-        results.append({'name':clip,**quality,'frame_count':timing['frame_count'],'game_frame_count':game['frame_count'],'duration_seconds':timing['duration_seconds'],'fps':timing['fps'],'source_fps':timing.get('source_fps')})
-        studio.progress_update(character,'validate',f'{clip}: {timing["frame_count"]} → {game["frame_count"]} 帧，时长不变',job=str(job))
+        try:
+            quality=studio.validate_sheet(staging/filename,original['frame_width'],original['frame_count'],allow_small=True)['quality']
+            timing={k:v for k,v in original.items() if k not in ('game','quality','sha256','unique_frames')}
+            timing.setdefault('fps',timing['frame_count']/timing['duration_seconds'])
+            game=studio.make_game_version(staging/filename,timing,quality,(data.get('equipment') or {}).get('usage'))
+            result[filename]={**original,'quality':quality,'game':game}
+            atomic(staging/(clip+'_render.json'),timing)
+            studio.make_preview(staging/filename,staging/(clip+'_preview.gif'),timing['duration_seconds'],timing['frame_width'],timing['frame_count'])
+            results.append({'name':clip,**quality,'frame_count':timing['frame_count'],'game_frame_count':game['frame_count'],'duration_seconds':timing['duration_seconds'],'fps':timing['fps'],'source_fps':timing.get('source_fps')})
+            studio.progress_update(character,'validate',f'{clip}: {timing["frame_count"]} → {game["frame_count"]} 帧，时长不变',job=str(job))
+        except (ValueError,OSError,KeyError,TypeError) as exc:
+            result.pop(filename,None)
+            rejected=job/'rejected';rejected.mkdir(exist_ok=True)
+            for folder in (staging,staging/'game'):
+                for suffix in ('_spritesheet.png','_render.json','_preview.gif','.tres'):
+                    path=folder/(clip+suffix)
+                    if path.is_file():path.rename(rejected/(('game_' if folder.name=='game' else '')+path.name))
+            results.append({'name':clip,'status':'failed','reason':str(exc)})
+            studio.progress_update(character,'validate',f'{clip}: 精简失败，已隔离；继续处理其他动作',job=str(job))
     result['quality_report']={'schema':1,'summary':{s:sum(r['status']==s for r in results) for s in ('passed','review','failed')},'results':results}
+    atomic(job/'quality.json',result['quality_report'])
+    counts=result['quality_report']['summary']
+    if counts['passed']+counts['review']==0:
+        raise ValueError('全部动作精简失败：'+'；'.join(r['reason'] for r in results))
     atomic(staging/'manifest.json',result)
     # Preserve equipment snapshots carried by the original delivery.
     for filename in ('equipment.json','equipment_usage.json'):
@@ -59,5 +73,5 @@ def run(root,character,pinned):
             source=Panel(root).scoped(str((directory/filename).relative_to(root)),f'deliverables/{character}/{pinned["delivery"]}')
             shutil.copy2(source,staging/filename)
     destination=root/'deliverables'/character/job_id;staging.rename(destination)
-    studio.progress_update(character,'complete',f'已精简 {len(results)} 个动作，原图集保留',status='complete',output=str(destination),job=str(job))
+    studio.progress_update(character,'complete',f'精简完成：通过 {counts["passed"]}，需复核 {counts["review"]}，失败 {counts["failed"]}；原图集保留',status='complete',output=str(destination),job=str(job))
     return destination

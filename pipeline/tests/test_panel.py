@@ -216,6 +216,38 @@ class PanelTests(unittest.TestCase):
         self.assertEqual(receipt['rig_sha256'],'bound')
         self.assertIn('idle.fbx',receipt['files'])
 
+    def test_failed_compact_worker_retains_quality_report(self):
+        import os
+        receipt=self.panel.tasks_dir/'compact1.json'
+        atomic(receipt,{'id':'compact1','character':'hero','action':'compact','params':{},'outputs':{}})
+        directory=self.root/'.local/jobs/compact-job'
+        report={'schema':1,'summary':{'passed':0,'review':0,'failed':1},'results':[{'name':'idle','status':'failed','reason':'empty'}]}
+        atomic(directory/'quality.json',report)
+        fd=os.open(os.devnull,os.O_RDONLY)
+        with patch.object(panel_worker.studio,'BASE_DIR',self.root),patch.object(sys,'argv',['worker',str(receipt),str(fd)]), \
+             patch.object(panel_worker,'execute',side_effect=ValueError('全部动作精简失败')), \
+             patch.object(panel_worker.studio,'progress_read',return_value={'job':str(directory)}), \
+             patch.object(panel_worker.studio,'progress_update'),patch.object(panel_worker.traceback,'print_exc'):
+            self.assertEqual(panel_worker.main(),1)
+        job=json.loads(receipt.read_text())
+        self.assertEqual(job['quality_report'],report)
+        self.assertEqual(job['status'],'failed')
+
+    def test_preflight_failure_does_not_reuse_previous_quality_report(self):
+        import os
+        import progress
+        receipt=self.panel.tasks_dir/'compact2.json'
+        old={'schema':1,'summary':{'passed':0,'review':0,'failed':1},'results':[{'name':'old','status':'failed'}]}
+        atomic(receipt,{'id':'compact2','character':'hero','action':'compact','params':{},'outputs':{},'quality_report':old})
+        directory=self.root/'.local/jobs/old-job';atomic(directory/'quality.json',old)
+        with patch.object(progress,'BASE_DIR',self.root):
+            progress.update('hero','validate','old',job=str(directory))
+            fd=os.open(os.devnull,os.O_RDONLY)
+            with patch.object(panel_worker.studio,'BASE_DIR',self.root),patch.object(sys,'argv',['worker',str(receipt),str(fd)]), \
+                 patch.object(panel_worker,'execute',side_effect=ValueError('来源已变化')),patch.object(panel_worker.traceback,'print_exc'):
+                self.assertEqual(panel_worker.main(),1)
+        self.assertNotIn('quality_report',json.loads(receipt.read_text()))
+
     def test_export_contains_only_published_assets(self):
         import zipfile
         target=self.root/'deliverables/hero/job1'

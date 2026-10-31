@@ -43,4 +43,39 @@ class CompactDelivery(unittest.TestCase):
         (self.source/'idle_spritesheet.png').write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError,'变化'):run(self.root,'hero',pinned)
 
+    def test_bad_clip_isolated_and_valid_sibling_published(self):
+        Image.new('RGBA',(640,64)).save(self.source/'walk_spritesheet.png')
+        pinned=plan(self.root,'hero','old',['walk','idle'])
+        with patch('progress.BASE_DIR',self.root):destination=run(self.root,'hero',pinned)
+        data=json.loads((destination/'manifest.json').read_text())
+        self.assertEqual(data['quality_report']['summary'],{'passed':0,'review':1,'failed':1})
+        self.assertTrue((destination/'game/idle.tres').is_file())
+        self.assertNotIn('walk_spritesheet.png',data)
+        self.assertFalse((destination/'walk_spritesheet.png').exists())
+        reports=list((self.root/'.local/jobs').glob('*/quality.json'))
+        self.assertEqual(json.loads(reports[0].read_text()),data['quality_report'])
+        self.assertEqual(len(list((self.root/'.local/jobs').glob('*/rejected/walk_spritesheet.png'))),1)
+
+    def test_all_failed_creates_quality_report_without_publishing(self):
+        for clip in ['idle','walk']:Image.new('RGBA',(640,64)).save(self.source/(clip+'_spritesheet.png'))
+        pinned=plan(self.root,'hero','old',['idle','walk'])
+        with patch('progress.BASE_DIR',self.root),self.assertRaisesRegex(ValueError,'全部动作精简失败'):
+            run(self.root,'hero',pinned)
+        self.assertEqual([p.name for p in self.source.parent.iterdir()],['old'])
+        report=json.loads(next((self.root/'.local/jobs').glob('*/quality.json')).read_text())
+        self.assertEqual(report['summary'],{'passed':0,'review':0,'failed':2})
+
+    def test_late_failure_quarantines_partially_generated_game_assets(self):
+        import studio_core
+        original=studio_core.make_game_version
+        def fail_after_write(sheet,*args,**kwargs):
+            result=original(sheet,*args,**kwargs)
+            if sheet.name.startswith('walk_'):raise ValueError('late fixture failure')
+            return result
+        pinned=plan(self.root,'hero','old',['idle','walk'])
+        with patch('progress.BASE_DIR',self.root),patch.object(studio_core,'make_game_version',side_effect=fail_after_write):
+            destination=run(self.root,'hero',pinned)
+        self.assertFalse(list((destination/'game').glob('walk*')))
+        self.assertEqual(len(list((self.root/'.local/jobs').glob('*/rejected/game_walk*'))),4)
+
 if __name__=='__main__':unittest.main()

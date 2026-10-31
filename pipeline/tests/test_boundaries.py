@@ -156,7 +156,7 @@ class Boundaries(unittest.TestCase):
         with self.assertRaises(ValueError):
             studio.bake('hero', 'run1')
 
-    def test_white_model_and_cropped_frames_are_rejected(self):
+    def test_low_saturation_is_advisory_and_cropped_frames_are_rejected(self):
         path = self.root / 'bad.png'
         sheet(path)
         image = Image.open(path).convert('RGBA')
@@ -166,8 +166,9 @@ class Boundaries(unittest.TestCase):
                 if pixels[x, y][3]:
                     pixels[x, y] = (240, 240, 240, 255)
         image.save(path)
-        with self.assertRaisesRegex(ValueError, '白模|灰模'):
-            studio.validate_sheet(path)
+        quality=studio.validate_sheet(path)['quality']
+        self.assertEqual(quality['status'],'review')
+        self.assertIn('low_saturation',[w['code'] for w in quality['warnings']])
         sheet(path)
         image = Image.open(path).convert('RGBA')
         ImageDraw.Draw(image).point((0, 40), fill='red')

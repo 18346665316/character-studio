@@ -125,14 +125,17 @@ def main():
     lock_fd = int(sys.argv[2])
     os.set_inheritable(lock_fd, False)
     job = json.loads(path.read_text())
+    job.pop('quality_report',None)
     job.update(status='running', started_at=stamp(), pid=os.getpid(), error=None)
     save(path, job)
     try:
+        if job['action'] in ('bake','sequence','compact'):
+            studio.progress_update(job['character'],'validate','正在启动新任务，检查输入')
         execute(job, lambda: save(path, job))
         job.update(status='succeeded', finished_at=stamp())
     except BaseException as exc:
         traceback.print_exc()
-        if job['action'] in ('bake','sequence'):
+        if job['action'] in ('bake','sequence','compact'):
             progress=studio.progress_read(job['character']) or {}
             quality_path=Path(progress.get('job',''))/'quality.json'
             if quality_path.is_file() and quality_path.resolve().is_relative_to((studio.BASE_DIR/'.local/jobs').resolve()):
