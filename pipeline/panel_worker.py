@@ -43,6 +43,10 @@ def execute(job, persist):
         outputs['prepared'] = str(studio.prepare(character).relative_to(studio.BASE_DIR))
     elif action == 'prepare':
         outputs['prepared'] = str(studio.prepare(character).relative_to(studio.BASE_DIR))
+    elif action == 'import_model':
+        from import_model import import_character
+        studio.progress_update(character,'prepare','正在导入 GLB、校准尺寸并生成外观预览')
+        outputs['prepared']=str(import_character(studio.BASE_DIR,character,studio.BASE_DIR/params['source'],params['up'],params['yaw']).relative_to(studio.BASE_DIR))
     elif action == 'optimize':
         from model_optimization import optimize
         studio.progress_update(character,'prepare','Blender 正在生成减面候选与四视图对照；当前绑定保持不变')
@@ -106,7 +110,7 @@ def execute(job, persist):
         outputs['equipment'] = str(edit(character, params['batch'], params.get('equipment_id'),params.get('weapon_id')).relative_to(studio.BASE_DIR))
     elif action == 'review':
         from review_character import review
-        outputs['review'] = str(review(character, params['batch'], capture_only=True).relative_to(studio.BASE_DIR))
+        outputs['review'] = str(review(character, params['batch'], capture_only=not params.get('heading_file'), heading_file=params.get('heading_file')).relative_to(studio.BASE_DIR))
     elif action == 'compact':
         from compact_delivery import run
         outputs['delivery']=str(run(studio.BASE_DIR,character,params))

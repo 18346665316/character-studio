@@ -43,7 +43,9 @@ def make_plan(panel,character,recipe):
             raise ValueError('编排动作不属于当前绑定，不能统一渲染')
         if not source.is_file() or not sha or panel.digest(source)!=sha or manifest.get('source',{}).get('files',{}).get(filename)!=sha:
             raise ValueError('编排原动画文件或来源记录已变化，请重新登记')
-        sources.append({'ref':ref,'path':str(source.relative_to(panel.root)),'sha256':sha,'target':'clip_'+sha[:20]+'.fbx'})
+        from motion_heading import records as heading_records
+        heading = heading_records(panel.root, character, {filename:sha}).get(filename)
+        sources.append({'heading':heading,'ref':ref,'path':str(source.relative_to(panel.root)),'sha256':sha,'target':'clip_'+sha[:20]+'.fbx'})
     pin=None
     if opts['equipment_id']:
         from equipment import load
@@ -78,6 +80,8 @@ def render(root,character,plan):
     cameras=[manifest[Path(f).stem+'_spritesheet.png'].get('camera') for f in files]
     if not cameras or not cameras[0] or any(camera!=cameras[0] for camera in cameras):
         raise ValueError('编排动作未使用相同相机，拒绝发布为统一预览')
-    record={'recipe':r,'delivery':destination.name,'clips':{s['ref']:Path(s['target']).stem for s in plan['sources']},'camera':cameras[0]}
+    record={'recipe':r,'delivery':destination.name,'clips':{s['ref']:Path(s['target']).stem for s in plan['sources']},'camera':cameras[0], 'heading_sources':{s['target']:s['sha256'] for s in plan['sources']}}
+    from motion_heading import records as heading_records
+    record['headings'] = heading_records(root, character, record['heading_sources'])
     atomic(panel.scoped(f'workspaces/{character}/sequence_preview.json',f'workspaces/{character}'),record)
     return record

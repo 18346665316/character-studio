@@ -60,6 +60,15 @@ class SequenceRenderTests(unittest.TestCase):
         self.assertEqual(record['camera'],camera);self.assertEqual(len(record['clips']),2)
         self.assertTrue((self.root/'workspaces/hero/sequence_preview.json').is_file())
 
+    def test_retry_rejects_changed_heading_before_any_bake(self):
+        from motion_heading import save
+        plan=make_plan(self.panel,'hero',self.recipe)
+        sha=plan['sources'][0]['sha256']
+        save(self.root,'hero',sha,{'degrees':-35,'status':'confirmed'})
+        with patch.object(studio,'bake') as bake,self.assertRaises(ValueError):
+            render(self.root,'hero',plan)
+        bake.assert_not_called()
+
     def test_retry_rejects_changed_source_before_any_bake(self):
         plan=make_plan(self.panel,'hero',self.recipe)
         (self.root/'workspaces/hero/animations/b0/attack.fbx').write_bytes(b'new')

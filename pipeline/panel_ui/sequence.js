@@ -8,7 +8,7 @@ function sequenceSettings(draft,options){
 }
 function sequenceRecipe(draft){const s=draft.renderSettings;return {sources:[...new Set(draft.segments.map(s=>s.delivery+'/'+s.clip))].sort(),renderer:s.renderer,view:s.view,frame_size:s.frame_size,supersample:s.supersample,equipment_id:s.equipment_id||null};}
 function sequencePreviewOptions(c,draft,options){
- const preview=c.sequence_preview;if(!preview||JSON.stringify(preview.recipe)!==JSON.stringify(sequenceRecipe(draft)))return null;
+ const preview=c.sequence_preview;if(!preview||preview.heading_stale||JSON.stringify(preview.recipe)!==JSON.stringify(sequenceRecipe(draft)))return null;
  const delivery=c.deliveries.find(d=>d.id===preview.delivery);if(!delivery)return null;
  const mapped=options.map(o=>({...o,delivery,item:gameItem(delivery.clips.find(i=>i.name===preview.clips[o.id])||{})}));
  return draft.segments.every(s=>mapped.some(o=>o.id===s.delivery+'/'+s.clip&&o.item?.sheet))?mapped:null;

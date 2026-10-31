@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import time
@@ -72,15 +73,52 @@ def open_profile(playwright, character, visible):
     if first_use and SESSION_FILE.is_file():
         saved = json.loads(SESSION_FILE.read_text())
         context.add_cookies(saved.get('cookies', []))
-        # Seed this new role profile once. Its later storage belongs to this role.
-        origins = {origin['origin']: origin.get('localStorage', []) for origin in saved.get('origins', [])}
-        context.add_init_script('''(() => {
-            const entries = %s[location.origin] || [];
-            for (const item of entries) if (localStorage.getItem(item.name) === null)
-                localStorage.setItem(item.name, item.value);
-        })();''' % json.dumps(origins))
+        # Never re-inject Adobe localStorage on every navigation: expired tokens
+        # otherwise return immediately after the login page clears them.
     page = context.pages[0] if context.pages else context.new_page()
     return context, page
+
+
+def safe_error(exc):
+    text=str(exc)
+    text=re.sub(r'https?://[^\s"<>]+',lambda m:m.group(0).split('?')[0].split('#')[0],text)
+    text=re.sub(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?','[redacted token]',text)
+    if 'Target page, context or browser has been closed' in text:
+        return 'Mixamo 浏览器已关闭，尚未完成登录或绑定。请重新打开绑定窗口并登录 Adobe。'
+    return text
+
+
+def wait_for_login(context,page,character=None,timeout=360):
+    started=time.monotonic();logout_hits=[];reset=False;announced=False
+    upload=page.get_by_role('button',name='Upload Character',exact=False)
+    while time.monotonic()-started<timeout:
+        if page.is_closed():raise ValueError('Mixamo 浏览器已关闭，尚未完成登录。请重新打开绑定窗口。')
+        try:
+            if upload.is_visible():
+                if character:progress_update(character,'rig','登录已恢复，继续上传人物')
+                return upload
+            url=page.url
+            if '/logout' in url:
+                logout_hits.append(time.monotonic())
+                logout_hits=[t for t in logout_hits if time.monotonic()-t<20]
+            if len(logout_hits)>=3 and not reset:
+                reset=True
+                context.clear_cookies()
+                if 'mixamo.com' in url:
+                    page.evaluate('() => { localStorage.clear(); sessionStorage.clear(); }')
+                # Clear stale Mixamo storage on the next document too, once only.
+                page.add_init_script("if(location.hostname==='www.mixamo.com'&&!sessionStorage.getItem('studioAuthReset')){localStorage.clear();sessionStorage.setItem('studioAuthReset','1');}")
+                page.goto('https://www.mixamo.com/#/',wait_until='domcontentloaded')
+            if not announced:
+                announced=True
+                print('等待 Adobe 登录；如会话失效，请在当前浏览器窗口重新登录。',flush=True)
+                if character:progress_update(character,'rig','等待 Adobe 登录；请在绑定窗口重新登录，登录后自动继续',status='waiting')
+            page.wait_for_timeout(1000)
+        except Exception as exc:
+            if page.is_closed():raise ValueError('Mixamo 浏览器已关闭，尚未完成登录。请重新打开绑定窗口。') from None
+            if 'Execution context was destroyed' in str(exc):continue
+            raise ValueError(safe_error(exc)) from None
+    raise ValueError('等待 Adobe 登录超过6分钟，请重新打开绑定窗口并登录')
 
 
 def action_login():
@@ -90,7 +128,7 @@ def action_login():
         page = context.new_page()
         page.goto('https://www.mixamo.com/#/', wait_until='domcontentloaded')
         print('请在浏览器中登录 Adobe；登录完成后保存本地会话。', flush=True)
-        page.get_by_role('button', name='Upload Character', exact=False).wait_for(timeout=360000)
+        wait_for_login(context,page)
         SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         context.storage_state(path=str(SESSION_FILE))
         SESSION_FILE.chmod(0o600)
@@ -184,8 +222,7 @@ def action_upload(model, character):
             page.goto('https://www.mixamo.com/#/', wait_until='domcontentloaded')
             print('请在可见 Mixamo 窗口确认朝向、放置关节点、完成绑定，并检查角色与变形。', flush=True)
             print('完成网页向导后，点击左下角 Studio 的确认按钮；关闭窗口将取消本次绑定。', flush=True)
-            upload = page.get_by_role('button', name='Upload Character', exact=False)
-            upload.wait_for(timeout=360000)  # User can renew an expired login here.
+            upload = wait_for_login(context,page,character)
             upload.click()
             page.locator('input[type="file"]').set_input_files(str(source))
             write_state(character, 'waiting_for_markers', **fields)
@@ -241,9 +278,9 @@ def action_upload(model, character):
             progress_update(character, 'rig', '人工绑定、贴图和网格检查通过')
             print(f'人工验收及网格检查通过。绑定模型已保存: {bound}', flush=True)
         except BaseException as exc:
-            progress_update(character, 'rig', str(exc), status='failed')
+            progress_update(character, 'rig', safe_error(exc), status='failed')
             write_state(character, 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed',
-                        **fields, error=str(exc))
+                        **fields, error=safe_error(exc))
             raise
         finally:
             if context:
@@ -396,7 +433,7 @@ def main():
         print('任务已取消；未登记为成功。', file=sys.stderr)
         return 130
     except Exception as exc:
-        print(f'Mixamo 任务失败: {exc}', file=sys.stderr)
+        print(f'Mixamo 任务失败: {safe_error(exc)}', file=sys.stderr)
         return 1
 
 

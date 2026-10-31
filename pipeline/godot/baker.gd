@@ -64,6 +64,9 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
     add_child(viewport)
     viewport.add_child(character)
+    var heading: Dictionary = load("res://heading_runtime.gd").record(path.get_file()) if FileAccess.file_exists("res://heading_runtime.gd") else {"degrees":0.0}
+    if FileAccess.file_exists("res://heading_runtime.gd"):
+        character = load("res://heading_runtime.gd").wrap_model(character, float(heading.degrees))
     var light := DirectionalLight3D.new()
     light.rotation_degrees = Vector3(-35, 45, 0)
     viewport.add_child(light)
@@ -222,7 +225,7 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     timing.merge({"duration_seconds": length, "frame_count": frame_count,
         "fps": float(frame_count) / length, "clip": selected, "view": view,
         "camera": {"size": camera.size, "center": [center.x,center.y,center.z], "view": view},
-        "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, true)
+        "heading": heading, "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, true)
     metadata.store_string(JSON.stringify(timing, "  "))
     metadata.close()
     if error != OK:

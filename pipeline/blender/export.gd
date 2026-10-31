@@ -63,13 +63,16 @@ func run() -> void:
                 quit(1)
                 return
         await process_frame
+        var heading: Dictionary = load("res://heading_runtime.gd").record(filename) if FileAccess.file_exists("res://heading_runtime.gd") else {"degrees":0.0}
+        if FileAccess.file_exists("res://heading_runtime.gd"):
+            character = load("res://heading_runtime.gd").wrap_model(character, float(heading.degrees))
         var state := GLTFState.new()
         var document := GLTFDocument.new()
         var result := document.append_from_scene(character, state)
         if result == OK:
             result = document.write_to_filesystem(state, output.path_join(filename.get_basename() + ".glb"))
         var timing: Dictionary = load("res://temporal_plan.gd").plan(player.get_animation(selected))
-        timing.merge({"usage":usage,"name":filename.get_basename()},true)
+        timing.merge({"usage":usage,"name":filename.get_basename(),"heading":heading},true)
         character.queue_free()
         await process_frame
         if result != OK:

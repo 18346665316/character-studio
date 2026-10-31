@@ -27,6 +27,9 @@ def sheet(path, animated=True, blank=False):
 
 class Boundaries(unittest.TestCase):
     def setUp(self):
+        heading_patch = patch('motion_heading.stage', return_value={})
+        heading_patch.start()
+        self.addCleanup(heading_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.patch = patch.object(studio, 'BASE_DIR', self.root)
@@ -66,6 +69,11 @@ class Boundaries(unittest.TestCase):
                 (output / 'run_render.json').write_text(json.dumps({
                     'duration_seconds': 1.0, 'frame_count': 10, 'fps': 10.0, 'view': 'three_quarter'}))
         return fake_run
+
+    def test_uncertain_heading_does_not_block_original_orientation_render(self):
+        with patch('motion_heading.stage',return_value={'run.fbx':{'degrees':0,'status':'uncertain'}}), patch.object(studio.subprocess,'run',side_effect=self.renderer()):
+            destination=studio.bake('hero','run1')
+        self.assertTrue((destination/'run_spritesheet.png').is_file())
 
     def test_nonempty_and_moving_gate(self):
         path = self.root / 'sheet.png'

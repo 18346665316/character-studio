@@ -324,6 +324,8 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         subprocess.run([GODOT, '--headless', '--editor', '--path', str(project), '--import',
                         '--log-file', str(job / 'import-engine.log')],
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
+    from motion_heading import stage as stage_heading
+    stage_heading(BASE_DIR, character, project, files, 'res://animations', GODOT, job)
     if renderer == 'godot':
         progress_update(character, 'render', '正在测量动作范围并渲染图集', job=str(job), batch=batch)
         with (job / 'bake.log').open('w') as log:

@@ -26,13 +26,21 @@ var bones_visible := false
 var bone_lines: MeshInstance3D
 var in_place := false
 var source_clips := {}
+var heading_parent: Node3D
+var heading_angle: SpinBox
+var heading_status: Label
+var heading_slider: HSlider
+var heading_values := {}
 
 func _ready() -> void:
     spec = JSON.parse_string(FileAccess.get_file_as_string("res://review.json"))
     _stage()
     _character()
+    heading_values = spec.get("headings", {}).duplicate(true)
+    if not heading_values.is_empty():
+        heading_parent = load("res://heading_runtime.gd").wrap_model(model, 0.0)
     _ui()
-    _play_action(choice.get_item_text(0))
+    _play_action(str(spec.get("heading_action", choice.get_item_text(0))))
     if spec.has("equipment_draft"):
         spec.equipment_draft.source_units_per_meter=1.0/model.scale.x
         var editor = load("res://equipment_editor.gd").new()
@@ -108,7 +116,7 @@ func _longest(player: AnimationPlayer) -> Animation:
     var result: Animation
     for clip_name in player.get_animation_list():
         var clip := player.get_animation(clip_name)
-        if clip_name != "RESET" and (result == null or clip.length > result.length):
+        if clip_name != "RESET" and (not FileAccess.file_exists("res://heading_runtime.gd") or load("res://heading_runtime.gd").has_motion(clip)) and (result == null or clip.length > result.length):
             result = clip
     return result
 
@@ -148,6 +156,17 @@ func _stage() -> void:
     camera.fov = 42
     orbit.add_child(camera)
     camera.current = true
+    var arrow := MeshInstance3D.new()
+    var lines := ImmediateMesh.new()
+    var arrow_material := StandardMaterial3D.new()
+    arrow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    arrow_material.albedo_color = Color("5bd4b5")
+    lines.surface_begin(Mesh.PRIMITIVE_LINES, arrow_material)
+    for point in [Vector3(0,0.015,0),Vector3(0,0.015,0.85),Vector3(0,0.015,0.85),Vector3(-0.12,0.015,0.65),Vector3(0,0.015,0.85),Vector3(0.12,0.015,0.65)]:
+        lines.surface_add_vertex(point)
+    lines.surface_end()
+    arrow.mesh = lines
+    add_child(arrow)
     _orbit()
     bone_lines = MeshInstance3D.new()
     bone_lines.name = "SkeletonOverlay"
@@ -185,7 +204,11 @@ func _ui() -> void:
     panel.add_theme_stylebox_override("panel", style)
     var column := VBoxContainer.new()
     column.add_theme_constant_override("separation", 12)
-    panel.add_child(column)
+    var scroll := ScrollContainer.new()
+    scroll.custom_minimum_size = Vector2(350, 640)
+    panel.add_child(scroll)
+    scroll.add_child(column)
+    column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     column.add_child(_label("STUDIO / CHARACTER", 15))
     column.add_child(_label("人物检查", 30))
     column.add_child(_label(str(spec.character), 17))
@@ -196,6 +219,35 @@ func _ui() -> void:
         choice.add_item(action)
     choice.item_selected.connect(func(index: int): _play_action(choice.get_item_text(index)))
     column.add_child(choice)
+    if heading_parent and not spec.has("equipment_draft"):
+        column.add_child(_label("朝向校准 · 固定水平补偿", 16))
+        heading_angle = SpinBox.new()
+        heading_angle.min_value = -180
+        heading_angle.max_value = 180
+        heading_angle.step = 0.1
+        heading_angle.suffix = "°"
+        heading_angle.value_changed.connect(func(value: float):
+            heading_parent.rotation_degrees.y = value
+            heading_slider.set_value_no_signal(value)
+            heading_status.text = "未保存 · 确认后重新生成图集")
+        column.add_child(heading_angle)
+        heading_slider = HSlider.new()
+        heading_slider.min_value = -180
+        heading_slider.max_value = 180
+        heading_slider.step = 0.1
+        heading_slider.value_changed.connect(func(value: float): heading_angle.value = value)
+        column.add_child(heading_slider)
+        var row := HBoxContainer.new()
+        row.add_child(_button("试用参考角度", func():
+            var record: Dictionary = heading_values.get(choice.get_item_text(choice.selected) + ".fbx", {})
+            heading_angle.value = float(record.get("estimated_degrees", 0.0))))
+        row.add_child(_button("重置", func(): heading_angle.value = 0.0))
+        row.add_child(_button("确认并保存", _save_heading))
+        column.add_child(row)
+        heading_status = _label("", 13)
+        heading_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+        column.add_child(heading_status)
+        column.add_child(_label("估计仅供参考；确认保存后才影响新图集\n切换动作将丢弃未保存调整", 12))
     play_button = _button("暂停", func():
         playing = not playing
         play_button.text = "暂停" if playing else "播放"
@@ -247,6 +299,13 @@ func _play_action(action: String) -> void:
                 choice.select(index)
     if play_button:
         play_button.text = "暂停" if playing else "播放"
+    if heading_parent:
+        var record: Dictionary = heading_values.get(action + ".fbx", {"degrees":0.0})
+        heading_parent.rotation_degrees.y = float(record.get("degrees", 0.0)) if record.get("status") == "confirmed" else 0.0
+        if heading_angle:
+            heading_angle.set_value_no_signal(heading_parent.rotation_degrees.y)
+            heading_slider.set_value_no_signal(heading_angle.value)
+            heading_status.text = "已确认" if record.get("status") == "confirmed" else str(record.get("reason", "待校准"))
     animation_player.play("review/" + action)
     animation_player.advance(0)
     animation_player.speed_scale = speed if playing else 0.0
@@ -355,3 +414,24 @@ func _capture_all() -> void:
     file.store_string(JSON.stringify(report, "  "))
     file.close()
     get_tree().quit()
+
+func _save_heading() -> void:
+    var filename := choice.get_item_text(choice.selected) + ".fbx"
+    var record: Dictionary = heading_values.get(filename, {}).duplicate(true)
+    if not spec.files.has(filename): return
+    record["degrees"] = heading_angle.value
+    record["status"] = "confirmed"
+    record["source_sha256"] = spec.files[filename]
+    record["schema"] = 1
+    var target: String = str(spec.heading_directory).path_join(str(spec.files[filename]) + ".json")
+    var file := FileAccess.open(target + ".tmp", FileAccess.WRITE)
+    if file == null:
+        heading_status.text = "保存失败，请检查目录权限"
+        return
+    file.store_string(JSON.stringify(record, "  "))
+    file.close()
+    if DirAccess.rename_absolute(target + ".tmp", target) != OK:
+        heading_status.text = "保存失败，请重试"
+        return
+    heading_values[filename] = record
+    heading_status.text = "已确认保存 · 关闭窗口后重新生成检查图和图集"

@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const actionNames={optimize:'模型减面对比',adopt_model:'采用优化模型',reconstruct:'生成模型与贴图',prepare:'准备贴图',rig:'骨骼绑定',download:'导入动画',review:'生成姿态检查',bake:'渲染图集',equipment:'调整武器挂点',weapon:'独立武器重建',sequence:'编排统一渲染',compact:'图集精简'};
+const actionNames={import_model:'导入外部模型',optimize:'模型减面对比',adopt_model:'采用优化模型',reconstruct:'生成模型与贴图',prepare:'准备贴图',rig:'骨骼绑定',download:'导入动画',review:'生成姿态检查',bake:'渲染图集',equipment:'调整武器挂点',weapon:'独立武器重建',sequence:'编排统一渲染',compact:'图集精简'};
 const statusNames={queued:'排队中',running:'执行中',succeeded:'已完成',failed:'失败',interrupted:'已中断'};
 let state=null,selected=localStorage.getItem('studio-character')||'',token='',busy=false,refreshId=0,refreshing=false,viewKey='',selection={type:'model'},logTask='',draft=[],animationFrame=0,player=null,uploadUrl;
 let preferences={};try{preferences=JSON.parse(localStorage.getItem('studio-preferences')||'{}');}catch{}
@@ -21,7 +21,7 @@ function notify(text,error=false){$('notice').hidden=false;$('notice').className
 function isRunning(j){return ['queued','running'].includes(j.status);}
 function active(){return state?.jobs.some(isRunning);}
 function blocked(){return busy||active();}
-function readyServer(){return state?.api_version>=15;}
+function readyServer(){return state?.api_version>=17;}
 function ownJobs(){return state.jobs.filter(j=>j.character===selected);}
 function rendererName(value){return value==='blender'?'Blender · Eevee':'Godot';}
 function usageSummary(usage,clip){if(!usage)return '手持';const action=usage.clips?.[clip]||{};const initial=action.initial&&action.initial!=='inherit'?action.initial:usage.default||'hand';return [usageLabels[initial],...(action.events||[]).map(e=>`${Math.round(e.at*100)}% → ${usageLabels[e.state]}`)].join(' · ');}
@@ -32,7 +32,7 @@ function sourceTime(id){return /^\d{8}-\d{6}/.test(id)?`${id.slice(4,6)}/${id.sl
 function motionApproved(c,b){return c.approvals.motions?.[b.id]?.fingerprint===b.fingerprint;}
 function animationApproved(c,b,file){return motionApproved(c,b)||c.approvals.animations?.[b.id]?.[file]?.fingerprint===b.fingerprint;}
 function batchApproved(c,b){return motionApproved(c,b)||b.files.every(file=>animationApproved(c,b,file));}
-function reviewFor(c,b){return c.reviews.find(r=>r.batch===b.id&&(!b.hashes||Object.keys(b.hashes).length===Object.keys(r.files||{}).length&&Object.entries(b.hashes).every(([file,hash])=>r.files?.[file]===hash)));}
+function reviewFor(c,b){return c.reviews.find(r=>r.batch===b.id&&(!b.hashes||Object.keys(b.hashes).length===Object.keys(r.files||{}).length&&Object.entries(b.hashes).every(([file,hash])=>r.files?.[file]===hash))&&b.files.every(file=>Math.abs(Number(r.headings?.[file]?.degrees||0)-Number(b.headings?.[file]?.degrees||0))<0.001));}
 // Resource identity includes the import source. Same-named animations never share approval or equipment accidentally.
 function animationResources(c){
  const ordered=[...c.batches.filter(b=>b.current_rig),...c.batches.filter(b=>!b.current_rig)];
@@ -61,8 +61,8 @@ function resourceItem(text,status,selectedValue,fn,warning=false){const b=button
 function resourceSection(title,add){const s=node('section',undefined,'resource-section'),head=node('div',undefined,'resource-section-head');head.append(node('span',title));if(add)head.append(button('＋ 添加',add));s.append(head);return s;}
 function setTitles(kind,title,inspector){$('preview-kind').textContent=kind;$('preview-title').textContent=title;$('control-title').textContent=inspector;}
 function renderModel(c){setTitles('MODEL','模型与贴图','模型属性');const content=$('preview-content'),controls=$('controls'),p=prefs();if(!c.inputs.some(i=>i.path===p.image))p.image=c.inputs[0]?.path||'';
- controls.append(field('来源原画',select(c.inputs.map((i,index)=>[i.path,`原画 ${c.inputs.length-index} · ${sourceTime(i.path.split('/').at(-2))}`]),p.image,v=>{p.image=v;remember();renderWorkspace(true);})),button('导入另一张原画',()=>openUpload(c.id),'full',blocked()));
- if(c.prepared){content.append(stageImage(c.prepared.contact,'人物多角度模型检查图'));controls.append(properties([['三角面',c.prepared.info.triangles_after],['贴图尺寸',c.prepared.info.texture_resolution],['外观状态',c.model_approved?'已确认':'待检查']]));controls.append(button(c.model_approved?'✓ 模型外观已确认':'确认模型外观',()=>mutation('/api/approve',{character:selected,kind:'model',fingerprint:c.prepared.fingerprint}),'primary full',blocked()||c.model_approved));controls.append(note('检查四肢分离、背面和悬浮碎片。确认只对应当前模型。'));if(c.model_approved&&!c.rig.ready)controls.append(button('设置骨骼绑定',()=>choose({type:'rig'}),'full'));controls.append(link('下载模型 GLB',c.prepared.glb));renderModelOptimization(c,controls);const advanced=details('重新生成与贴图',button('用所选原画重新生成',()=>start('reconstruct',{image:p.image}),'full',blocked()||!p.image),button('重新准备贴图',()=>start('prepare'),'full',blocked()),note('更新模型后需要重新确认外观和绑定，历史导出保留。'));controls.append(advanced);if(p.image)content.append(details('查看来源原画',stageImage(c.inputs.find(i=>i.path===p.image).url,'所选原画')));$('viewport-note').textContent='当前显示已生成的多角度检查图。';}
+ if(c.inputs.length)controls.append(field('来源原画',select(c.inputs.map((i,index)=>[i.path,`原画 ${c.inputs.length-index} · ${sourceTime(i.path.split('/').at(-2))}`]),p.image,v=>{p.image=v;remember();renderWorkspace(true);})),button('导入另一张原画',()=>openUpload(c.id),'full',blocked()));
+ if(c.prepared){content.append(stageImage(c.prepared.contact,'人物多角度模型检查图'));controls.append(properties([['三角面',c.prepared.info.triangles_after],['贴图尺寸',c.prepared.info.texture_resolution],['外观状态',c.model_approved?'已确认':'待检查']]));controls.append(button(c.model_approved?'✓ 模型外观已确认':'确认模型外观',()=>mutation('/api/approve',{character:selected,kind:'model',fingerprint:c.prepared.fingerprint}),'primary full',blocked()||c.model_approved));controls.append(note('检查四肢分离、背面和悬浮碎片。确认只对应当前模型。'));if(c.model_approved&&!c.rig.ready)controls.append(button('设置骨骼绑定',()=>choose({type:'rig'}),'full'));controls.append(link('下载模型 GLB',c.prepared.glb));renderModelOptimization(c,controls);const advanced=details('重新生成与贴图',button('用所选原画重新生成',()=>start('reconstruct',{image:p.image}),'full',blocked()||!p.image),button('重新准备贴图',()=>start('prepare'),'full',blocked()),note('更新模型后需要重新确认外观和绑定，历史导出保留。'));if(c.prepared.info.origin!=='import_glb')controls.append(advanced);else controls.append(note('来源：直接导入 GLB。原始文件已保留；无需重新建模或烘焙顶点颜色。'));if(p.image)content.append(details('查看来源原画',stageImage(c.inputs.find(i=>i.path===p.image).url,'所选原画')));$('viewport-note').textContent='当前显示已生成的多角度检查图。';}
  else{const input=c.inputs.find(i=>i.path===p.image);content.append(input?stageImage(input.url,'人物原画'):placeholder('导入一张人物原画','全身立姿、轮廓简洁、四肢与躯干分离。'));controls.append(button('生成模型与贴图',()=>start('reconstruct',{image:p.image}),'primary full',blocked()||!p.image),note('生成完成后在这里检查模型，再设置骨骼绑定。'));}
 }
 function renderRig(c){setTitles('RIG','骨骼绑定','绑定属性');const controls=$('controls'),content=$('preview-content');content.append(c.prepared?stageImage(c.prepared.contact,'待绑定模型'):placeholder('先准备模型','生成模型并确认外观后，才能绑定骨骼。'));controls.append(node('div',c.rig.ready?'✓ 当前模型骨骼绑定可用':c.rig.status==='needs_review'?'Mixamo 人物需要重新确认':'尚未完成绑定',c.rig.ready?'approval-state':'callout'));if(c.rig.error)controls.append(note(c.rig.error));controls.append(button(c.rig.ready?'重新打开 Mixamo 绑定':'打开 Mixamo 绑定',()=>start('rig'),'primary full',blocked()||!c.model_approved),note('1. 在弹出的 Mixamo 窗口登录并放置关节点。\n2. 检查关节变形。\n3. 点击 Mixamo 左下角的 Studio 确认。'));if(!c.model_approved)controls.append(button('前往检查模型',()=>choose({type:'model'}),'full'));if(c.rig.ready)controls.append(button('＋ 添加动画',openAdd,'full'));$('viewport-note').textContent='关节点标注在 Mixamo 窗口完成；执行状态可在下方任务栏查看。';}
@@ -181,3 +181,17 @@ function renderModelOptimization(c,controls){
  }
  controls.append(box);
 }
+
+$('import-model').onclick=()=>{$('model-dialog').showModal();};
+$('close-model').onclick=()=>$('model-dialog').close();
+$('model-form').onsubmit=async event=>{
+ event.preventDefault();if(blocked()||!readyServer())return;
+ const file=$('model-file').files[0];if(!file)return;if(file.size>100*1024*1024){notify('GLB 不能超过100MB',true);return;}
+ const submit=$('model-submit');submit.disabled=true;submit.textContent='正在上传模型…';
+ try{
+  const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});
+  const result=await api('/api/model/upload',{display_name:$('model-name').value,content,up:$('model-up').value,yaw:Number($('model-yaw').value)});
+  selected=result.character;state=null;selection={type:'model'};libraryOpen=false;prefs().editorSelection=selection;remember();localStorage.setItem('studio-character',selected);await refresh(true);
+  if(await start('import_model',{source:result.source,up:result.up,yaw:result.yaw}))$('model-dialog').close();
+ }catch(e){notify(e.message,true);}finally{submit.disabled=false;submit.textContent='导入并准备模型';}
+};

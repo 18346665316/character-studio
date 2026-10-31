@@ -45,7 +45,7 @@ def verified_batch(root, character, batch, digest):
 
 
 @track_failures
-def review(character, batch, capture_only=False, equipment_editor=None):
+def review(character, batch, capture_only=False, equipment_editor=None, heading_file=None):
     import studio_core as studio
     character, batch = studio.slug(character), studio.slug(batch)
     root = studio.BASE_DIR
@@ -86,6 +86,12 @@ def review(character, batch, capture_only=False, equipment_editor=None):
         subprocess.run([studio.GODOT, '--headless', '--editor', '--path', str(project), '--import',
                         '--log-file', str(job / 'import-engine.log')],
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
+    from motion_heading import stage as stage_heading
+    headings = stage_heading(root, character, project, receipt['files'], 'res://assets', studio.GODOT, job)
+    spec['headings'] = headings
+    spec['heading_directory'] = str(root / 'workspaces' / character / 'motion_heading')
+    if heading_file: spec['heading_action'] = Path(heading_file).stem
+    (project / 'review.json').write_text(json.dumps(spec, ensure_ascii=False, indent=2) + '\n')
     update(character, 'review', '正在检查人物动作与多角度外观', output=str(output), job=str(job), batch=batch)
     args = [studio.GODOT, '--path', str(project), '--log-file', str(job / 'review-engine.log')]
     if capture_only:

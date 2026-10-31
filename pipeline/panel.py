@@ -20,9 +20,9 @@ from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact'}
+ACTIONS = {'import_model','optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简'}
+          'import_model':'导入外部模型','optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简'}
 
 
 def now():
@@ -194,6 +194,12 @@ class Panel:
             batches.append({'titles':titles,'id':receipt.parent.name, 'fingerprint': self.digest(receipt),
                             'files': list(info.get('files', {})), 'hashes': info.get('files', {}),
                             'current_rig': rig_ready and info.get('rig_sha256') == state.get('bound_sha256')})
+        from motion_heading import records as heading_records
+        for batch_info in batches:
+            batch_info['headings'] = heading_records(self.root, character, batch_info['hashes'])
+        sequence_preview = read(self.scoped(f'workspaces/{character}/sequence_preview.json', f'workspaces/{character}'), None)
+        if sequence_preview and sequence_preview.get('heading_sources'):
+            sequence_preview['heading_stale'] = sequence_preview.get('headings') != heading_records(self.root, character, sequence_preview['heading_sources'])
         reviews = []
         for spec in files('reviews/*/viewer/review.json'):
             info = read(spec, {})
@@ -201,7 +207,7 @@ class Panel:
             report = spec.parent / 'character-report.json'
             if report.is_file():
                 reviews.append({'id':spec.parent.parent.name, 'batch':info.get('batch'),
-                                'files':info.get('files'),
+                                'files':info.get('files'), 'headings':info.get('headings',{}),
                                 'images':[{'name':p.stem, 'url':self.asset(p)} for p in sorted(captures.glob('*.png'))],
                                 'report':self.asset(report)})
         deliveries = []
@@ -210,8 +216,10 @@ class Panel:
             info = read(manifest, {})
             if info.get('source', {}).get('character') != character:
                 continue
+            current_headings = heading_records(self.root, character, info.get('source',{}).get('files',{}))
+            heading_stale = any(abs(float(info.get(Path(f).stem+'_spritesheet.png',{}).get('heading',{}).get('degrees',0)) - float(value.get('degrees',0))) > 0.001 for f,value in current_headings.items())
             deliveries.append({'id':manifest.parent.name, 'batch':info.get('source', {}).get('batch'),
-                               'operation':info.get('operation'), 'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
+                               'heading_stale':heading_stale, 'operation':info.get('operation'), 'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
                                'quality_report':info.get('quality_report'), 'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
                                'clips':[{'name':p.stem.replace('_preview',''), 'gif':self.asset(p),
                                          'sheet':self.asset(p.with_name(p.name.replace('_preview.gif','_spritesheet.png'))),
@@ -219,6 +227,8 @@ class Panel:
                                          'game':self.game_clip(manifest.parent,info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}).get('game'))}
                                         for p in sorted(manifest.parent.glob('*_preview.gif'))],
                                'export':'/api/export?character='+character+'&delivery='+manifest.parent.name})
+        if sequence_preview and any(d['id'] == sequence_preview.get('delivery') and d.get('heading_stale') for d in deliveries):
+            sequence_preview['heading_stale'] = True
         equipment = []
         from equipment import load as load_equipment
         for config_path in files('equipment/*/equipment.json'):
@@ -246,7 +256,7 @@ class Panel:
         return {'id':character, 'display_name':profile.get('display_name',character), 'inputs':inputs, 'has_model':model.is_file(), 'prepared':prepared,
                 'rig':{'status':state.get('status'), 'ready':bool(rig_ready), 'recovery_available':bool(rig_ready and recovery_available), 'error':state.get('error')}, 'batches':batches,
                 'equipment':equipment, 'reviews':reviews[:12], 'deliveries':deliveries, 'approvals':approvals,
-                'sequence_preview':read(self.scoped(f'workspaces/{character}/sequence_preview.json',f'workspaces/{character}'),None),
+                'sequence_preview':sequence_preview,
                 'sequence':read(self.scoped(f'workspaces/{character}/sequence.json',f'workspaces/{character}'), None),
                 'model_approved':model_ok, 'optimizations':optimizations,
                 'progress':read(self.root / '.local/progress' / (character+'.json'))}
@@ -262,6 +272,22 @@ class Panel:
             return True
         except ValueError:
             return False
+
+    def upload_model(self,data):
+        from import_model import validate_glb
+        display=data.get('display_name','')
+        if not isinstance(display,str) or not 1<=len(display.strip())<=60:raise ValueError('人物名称需为1–60个字符')
+        try:content=base64.b64decode(data.get('content',''),validate=True)
+        except (ValueError,TypeError):raise ValueError('模型内容无效')
+        if not content or len(content)>100*1024*1024:raise ValueError('GLB 须小于100MB')
+        validate_glb(content)
+        up=data.get('up','Y');yaw=data.get('yaw',0)
+        if up not in ('Y','-Y','Z','-Z','X','-X') or type(yaw) is not int or yaw not in (0,90,180,270):raise ValueError('模型朝向设置无效')
+        character='character-'+secrets.token_hex(5)
+        ws=self.root/'workspaces'/character
+        source=ws/'model_inputs/original.glb';source.parent.mkdir(parents=True);source.write_bytes(content)
+        atomic(ws/'character.json',{'display_name':display.strip(),'origin':'import_glb'})
+        return {'character':character,'source':str(source.relative_to(self.root)),'up':up,'yaw':yaw}
 
     def upload(self, data):
         character_id=data.get('character') or ('character-'+secrets.token_hex(5))
@@ -338,6 +364,13 @@ class Panel:
             if not path.is_file() or path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
                 raise ValueError('请先上传原画')
             clean['image'] = str(path.relative_to(self.root))
+        if action == 'import_model':
+            source=self.scoped(params.get('source'),f'workspaces/{character}/model_inputs')
+            if not source.is_file() or source.suffix!='.glb':raise ValueError('请先上传 GLB 模型')
+            if c['has_model']:raise ValueError('此人物已导入模型，不能覆盖')
+            up=params.get('up','Y');yaw=params.get('yaw',0)
+            if up not in ('Y','-Y','Z','-Z','X','-X') or type(yaw) is not int or yaw not in (0,90,180,270):raise ValueError('模型朝向设置无效')
+            clean={'source':str(source.relative_to(self.root)),'up':up,'yaw':yaw}
         if action == 'optimize':
             if not c['prepared']:raise ValueError('请先准备带贴图模型')
             clean={'prepared':c['prepared']['id'],'fingerprint':c['prepared']['fingerprint']}
@@ -372,6 +405,9 @@ class Panel:
             if not match:
                 raise ValueError('请先选择完整动作批次')
             clean['batch'] = batch
+            if action == 'review' and params.get('heading_file'):
+                if params['heading_file'] not in match['files']: raise ValueError('请选择本批次内的动作')
+                clean['heading_file'] = params['heading_file']
             if action == 'equipment':
                 if not match['current_rig']:
                     raise ValueError('请选择当前已验收绑定的动作批次')
@@ -577,7 +613,7 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':15,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':17,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
@@ -612,7 +648,7 @@ def handler(panel):
                 return self.respond({'error':'请求校验失败，请刷新页面'},code=403)
             try:
                 size = int(self.headers.get('Content-Length','0'))
-                if not 0 < size <= 18*1024*1024:
+                if not 0 < size <= (140*1024*1024 if urlparse(self.path).path=='/api/model/upload' else 18*1024*1024):
                     raise ValueError('请求为空或超过上传限制')
                 if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
                     raise ValueError('需要 JSON 请求')
@@ -621,7 +657,9 @@ def handler(panel):
                     raise ValueError('无效的请求结构')
                 with panel.mutex:
                     route = urlparse(self.path).path
-                    if route == '/api/upload':
+                    if route == '/api/model/upload':
+                        result=panel.upload_model(data)
+                    elif route == '/api/upload':
                         result = panel.upload(data)
                     elif route == '/api/weapon/upload':
                         result=panel.upload_weapon(data)
