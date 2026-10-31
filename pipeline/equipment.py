@@ -1,4 +1,4 @@
-"""Versioned one-hand annotations, pinned to a verified rig and animation batch."""
+"""Versioned one-hand annotations, pinned to a character and verified rig; batches retain review provenance."""
 import json
 import math
 from pathlib import Path
@@ -44,15 +44,20 @@ def validate(config):
 
 def load(root, character, batch, equipment_id):
     import studio_core as studio
+    studio.slug(character)
+    if batch is not None: studio.slug(batch)
     studio.slug(equipment_id)
     directory=root/'workspaces'/character/'equipment'/equipment_id
     if directory.is_symlink() or not directory.resolve().is_relative_to((root/'workspaces'/character/'equipment').resolve()):
         raise ValueError('非法装备路径')
     config=validate(json.loads((directory/'equipment.json').read_text()))
-    receipt=json.loads((root/'workspaces'/character/'animations'/batch/'batch.json').read_text())
-    if (config.get('character')!=character or config.get('batch')!=batch or config.get('files')!=receipt.get('files')
-            or not receipt.get('rig_sha256') or config.get('rig_sha256')!=receipt['rig_sha256']):
-        raise ValueError('装备配置与人物、动作或绑定版本不匹配，请重新标注确认')
+    if config.get('character')!=character or not config.get('rig_sha256'):
+        raise ValueError('装备配置与人物或绑定版本不匹配，请重新检查挂点')
+    if batch is not None:
+        receipt=json.loads((root/'workspaces'/character/'animations'/batch/'batch.json').read_text())
+        if (not receipt.get('rig_sha256') or config['rig_sha256']!=receipt['rig_sha256']
+                or receipt.get('character',character)!=character or receipt.get('batch',batch)!=batch):
+            raise ValueError('装备配置与人物或绑定版本不匹配，请重新检查挂点')
     if config.get('schema')==2:
         from weapon_assets import digest
         model=directory/'weapon.glb'

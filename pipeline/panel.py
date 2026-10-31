@@ -208,10 +208,17 @@ class Panel:
         for config_path in files('equipment/*/equipment.json'):
             config = read(config_path, {})
             try:
-                load_equipment(self.root, character, config.get('batch'), config_path.parent.name)
+                load_equipment(self.root, character, None, config_path.parent.name)
             except (ValueError, OSError, TypeError, KeyError):
                 continue
-            equipment.append({'id':config_path.parent.name, 'batch':config['batch'], 'bone':config['bone'],
+            compatible=[]
+            for batch in batches:
+                try:
+                    load_equipment(self.root,character,batch['id'],config_path.parent.name)
+                    compatible.append(batch['id'])
+                except (ValueError,OSError,TypeError,KeyError):
+                    continue
+            equipment.append({'id':config_path.parent.name, 'batch':config['batch'], 'compatible_batches':compatible, 'bone':config['bone'],
                               'weapon':config['weapon'], 'weapon_name':config.get('weapon_name','标准单手剑'), 'scale':config['weapon_scale'],
                               'config':self.asset(config_path), 'preview':self.asset(config_path.parent/'review.png')})
         approvals = read(ws / 'panel_approvals.json', {})
@@ -487,7 +494,7 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':4,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':5,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):

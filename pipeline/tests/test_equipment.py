@@ -36,7 +36,7 @@ class EquipmentTests(unittest.TestCase):
         settings=config();settings['hand_points'][0]=[100,0,0]
         with self.assertRaises(ValueError):validate(settings)
 
-    def test_load_pins_character_batch_files_and_rig(self):
+    def test_load_reuses_same_rig_across_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             settings=config()
@@ -47,7 +47,15 @@ class EquipmentTests(unittest.TestCase):
             original={'files':settings['files'],'rig_sha256':'rig'}
             receipt.write_text(json.dumps(original))
             self.assertEqual(load(root,'hero','batch1','e1')['bone'],'mixamorig_RightHand')
-            for change in [{'rig_sha256':'other'},{'files':{'idle.fbx':'changed'}}]:
+            second=root/'workspaces/hero/animations/batch2/batch.json'
+            second.parent.mkdir(parents=True)
+            second.write_text(json.dumps({'files':{'slash.fbx':'new'},'rig_sha256':'rig'}))
+            self.assertEqual(load(root,'hero','batch2','e1')['hand_points'],settings['hand_points'])
+            self.assertEqual(load(root,'hero','batch2','e1')['batch'],'batch1')
+            receipt.unlink()
+            self.assertEqual(load(root,'hero',None,'e1')['rig_sha256'],'rig')
+            self.assertEqual(load(root,'hero','batch2','e1')['weapon'],'studio_sword_v1')
+            for change in [{'rig_sha256':'other'},{'rig_sha256':None},{'character':'other'}]:
                 receipt.write_text(json.dumps({**original,**change}))
                 with self.assertRaises(ValueError):load(root,'hero','batch1','e1')
 

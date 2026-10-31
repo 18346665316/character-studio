@@ -8,6 +8,8 @@ var target_fps := 12.0
 var preflight := true
 var shared_bounds := AABB()
 var has_shared_bounds := false
+var shared_screen := Rect2()
+var has_shared_screen := false
 
 func _ready() -> void:
     var args := OS.get_cmdline_user_args()
@@ -136,6 +138,10 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     player.pause()
     await get_tree().process_frame
     # Frame imported geometry in world space; Mixamo exports need not use meter-sized bounds.
+    var angle := PI / 2.0 if view == "side" else PI / 4.0 if view == "three_quarter" else 0.0
+    var screen_right := Vector3(cos(angle), 0, -sin(angle))
+    var screen_bounds := Rect2()
+    var found_screen := false
     var bounds := AABB()
     var found_bounds := false
     # Skinning may move vertices well outside the imported bind-pose AABB.
@@ -150,6 +156,10 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
             if item is MeshInstance3D and item.mesh != null:
                 var posed: ArrayMesh = item.bake_mesh_from_current_skeleton_pose() if item.skin != null else null
                 var local_bounds: AABB = posed.get_aabb() if posed != null else item.get_aabb()
+                # Project each posed box before merging: camera depth must not set sprite scale.
+                var projected := project_bounds(local_bounds, item.global_transform, screen_right)
+                screen_bounds = screen_bounds.merge(projected) if found_screen else projected
+                found_screen = true
                 var box: AABB = item.global_transform * local_bounds
                 bounds = bounds.merge(box) if found_bounds else box
                 found_bounds = true
@@ -161,18 +171,18 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     if preflight:
         shared_bounds = shared_bounds.merge(bounds) if has_shared_bounds else bounds
         has_shared_bounds = true
+        shared_screen = shared_screen.merge(screen_bounds) if has_shared_screen else screen_bounds
+        has_shared_screen = true
         viewport.queue_free()
         await get_tree().process_frame
         return true
     bounds = shared_bounds
     var center := bounds.get_center()
     var extent := maxf(maxf(bounds.size.x, bounds.size.y), bounds.size.z)
-    camera.size = maxf(extent * 1.35, 0.0001)
-    var angle := 0.0
-    if view == "side":
-        angle = PI / 2.0
-    elif view == "three_quarter":
-        angle = PI / 4.0
+    var screen_center := shared_screen.get_center()
+    center += screen_right * (screen_center.x - center.dot(screen_right))
+    center.y = screen_center.y
+    camera.size = maxf(maxf(shared_screen.size.x, shared_screen.size.y) * 1.12, 0.0001)
     camera.position = center + Vector3(sin(angle), 0, cos(angle)) * maxf(extent * 3.0, 0.001)
     camera.near = maxf(extent * 0.001, 0.000001)
     camera.far = maxf(extent * 10.0, 0.01)
@@ -198,7 +208,7 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
         return false
     metadata.store_string(JSON.stringify({"duration_seconds": length, "frame_count": frame_count,
         "fps": float(frame_count) / length, "clip": selected, "view": view,
-        "render_style": "unshaded_texture", "framing": "shared_batch_bounds", "frame_width": frame_size, "frame_height": frame_size}, "  "))
+        "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, "  "))
     metadata.close()
     if error != OK:
         push_error("Could not save sprite sheet: " + str(error))
@@ -219,3 +229,11 @@ func _has_motion(clip: Animation) -> bool:
             if clip.track_get_key_value(track, key) != first:
                 return true
     return false
+
+static func project_bounds(box: AABB, transform: Transform3D, screen_right: Vector3) -> Rect2:
+    var result := Rect2()
+    for corner in range(8):
+        var point := transform * box.get_endpoint(corner)
+        var screen := Vector2(point.dot(screen_right), point.y)
+        result = result.expand(screen) if corner > 0 else Rect2(screen, Vector2.ZERO)
+    return result

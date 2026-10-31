@@ -54,7 +54,10 @@ class WeaponAssetTests(unittest.TestCase):
         batch=self.root/'workspaces/hero/animations/batch1';batch.mkdir(parents=True)
         (batch/'batch.json').write_text(json.dumps({'files':cfg['files'],'rig_sha256':'rig'}))
         (asset_dir(self.root,'w1')/'model.glb').write_bytes(b'library changed')
-        loaded=load_equipment(self.root,'hero','batch1','e1')
+        other=self.root/'workspaces/hero/animations/new-actions'
+        other.mkdir(parents=True)
+        (other/'batch.json').write_text(json.dumps({'files':{'slash.fbx':'new'},'rig_sha256':'rig'}))
+        loaded=load_equipment(self.root,'hero','new-actions','e1')
         project=self.root/'project';project.mkdir();stage_model(loaded,target/'weapon.glb',project)
         self.assertEqual(digest(project/'weapon.glb'),cfg['weapon_model_sha256'])
         (target/'weapon.glb').write_bytes(b'bad snapshot')
