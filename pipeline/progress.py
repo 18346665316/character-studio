@@ -9,7 +9,7 @@ import tempfile
 BASE_DIR = Path(__file__).resolve().parent.parent
 LABELS = {'reconstruction': '原画重建', 'prepare': '贴图准备与预览', 'rig': '人工绑定与模型验证',
           'download': '动作下载与验证', 'import': 'Godot 导入', 'render': '图集渲染',
-          'equipment': '装备与挂点', 'validate': '画面与时序检查', 'review': '人物外观与动作验收', 'complete': '输出完成'}
+          'weapon':'独立武器重建', 'equipment': '装备与挂点', 'validate': '画面与时序检查', 'review': '人物外观与动作验收', 'complete': '输出完成'}
 
 
 def update(character, stage, message, status='running', **details):

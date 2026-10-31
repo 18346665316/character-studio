@@ -328,7 +328,7 @@ func _focus_weapon() -> void:
     viewer.model.visible=false
     if attached: attached.visible=false
     if not weapon:
-        weapon=Runtime.sword()
+        weapon=Runtime.weapon_model(config)
         add_child(weapon)
     weapon.visible=true
     viewer.orbit.position=Vector3(-0.12,0.25,0)

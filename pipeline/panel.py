@@ -20,9 +20,9 @@ from PIL import Image
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment'}
+ACTIONS = {'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注'}
+          'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建'}
 
 
 def now():
@@ -97,6 +97,12 @@ class Panel:
         # Expose only character production assets, never .local, credentials, code,
         # arbitrary files or a symlink outside its original character subtree.
         parts = Path(relative).parts
+        if len(parts)==3 and parts[0]=='weapons':
+            from weapon_assets import load as load_weapon, asset_dir
+            load_weapon(self.root,parts[1])
+            if parts[2] not in ('front.png','contact.png','model.glb','original.png','processed.png'):
+                raise ValueError('禁止访问此武器文件')
+            return self.scoped(relative,'weapons/'+parts[1])
         if len(parts) < 4 or parts[0] not in ('workspaces', 'deliverables'):
             raise ValueError('禁止访问此文件')
         name(parts[1])
@@ -206,7 +212,7 @@ class Panel:
             except (ValueError, OSError, TypeError, KeyError):
                 continue
             equipment.append({'id':config_path.parent.name, 'batch':config['batch'], 'bone':config['bone'],
-                              'weapon':config['weapon'], 'scale':config['weapon_scale'],
+                              'weapon':config['weapon'], 'weapon_name':config.get('weapon_name','标准单手剑'), 'scale':config['weapon_scale'],
                               'config':self.asset(config_path), 'preview':self.asset(config_path.parent/'review.png')})
         approvals = read(ws / 'panel_approvals.json', {})
         model_ok = bool(prepared and approvals.get('model', {}).get('fingerprint') == prepared['fingerprint'])
@@ -260,11 +266,34 @@ class Panel:
             atomic(profile,{'display_name':display_name.strip()})
         return {'character': character, 'image':str(path.relative_to(self.root))}
 
+    def upload_weapon(self,data):
+        display=data.get('name','')
+        if not isinstance(display,str) or not 1<=len(display.strip())<=60:
+            raise ValueError('武器名称需为1–60个字符')
+        try:
+            content=base64.b64decode(data.get('content',''),validate=True)
+            if not content or len(content)>12*1024*1024: raise ValueError('图片需小于12MB')
+            with Image.open(BytesIO(content)) as image:
+                if min(image.size)<64 or image.width*image.height>20_000_000: raise ValueError('图片尺寸无效')
+                image.load();converted=image.convert('RGB')
+        except (OSError,TypeError,Image.DecompressionBombError):
+            raise ValueError('请选择有效武器图片')
+        identity='input-'+secrets.token_hex(6)
+        path=self.scoped(f'.local/weapon-inputs/{identity}/original.png','.local/weapon-inputs')
+        path.parent.mkdir(parents=True);converted.save(path)
+        return {'image':str(path.relative_to(self.root)),'name':display.strip()}
+
     def validate_task(self, character, action, params):
         c = self.character(character)
         if action not in ACTIONS or not isinstance(params, dict):
             raise ValueError('不支持的操作')
         clean = {}
+        if action == 'weapon':
+            path=self.scoped(params.get('image'),'.local/weapon-inputs')
+            if not path.is_file() or path.name!='original.png': raise ValueError('请先导入武器原画')
+            display=params.get('name','')
+            if not isinstance(display,str) or not 1<=len(display.strip())<=60: raise ValueError('武器名称无效')
+            clean.update(image=str(path.relative_to(self.root)),name=display.strip())
         if action == 'reconstruct':
             path = self.scoped(params.get('image'), f'workspaces/{character}/inputs')
             if not path.is_file() or path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
@@ -298,6 +327,11 @@ class Panel:
             if action == 'equipment':
                 if not match['current_rig']:
                     raise ValueError('请选择当前已验收绑定的动作批次')
+                if params.get('weapon_id'):
+                    if params.get('equipment_id'): raise ValueError('新建武器与编辑装备不能同时选择')
+                    from weapon_assets import load as load_weapon
+                    clean['weapon_id']=name(params['weapon_id'])
+                    load_weapon(self.root,clean['weapon_id'],confirmed=True)
                 if params.get('equipment_id'):
                     from equipment import load as load_equipment
                     clean['equipment_id'] = name(params['equipment_id'])
@@ -453,7 +487,9 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':3,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':4,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        from weapon_assets import catalog as weapon_catalog
+                        result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
                             result['selected'] = panel.character(query['character'][0])
                             from workflow import guidance
@@ -497,6 +533,13 @@ def handler(panel):
                     route = urlparse(self.path).path
                     if route == '/api/upload':
                         result = panel.upload(data)
+                    elif route == '/api/weapon/upload':
+                        result=panel.upload_weapon(data)
+                    elif route == '/api/weapon/calibrate':
+                        if any(j['status'] in ('queued','running') for j in panel.jobs()):
+                            raise ValueError('请等待当前任务完成后再确认武器')
+                        from weapon_assets import calibrate
+                        result=calibrate(panel.root,name(data.get('weapon')),data.get('length'),data.get('grip'))
                     elif route == '/api/tasks':
                         result = panel.start(data)
                     elif route == '/api/approve':

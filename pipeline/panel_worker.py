@@ -84,9 +84,18 @@ def execute(job, persist):
         save(target / 'batch.json', receipt)
         studio.progress_update(character, 'download', '动作下载与结构检查完成，请生成预览并人工验收',
                                status='waiting', batch=batch)
+    elif action == 'weapon':
+        from weapon_assets import generate,load as load_weapon
+        if outputs.get('weapon'):
+            load_weapon(studio.BASE_DIR,outputs['weapon'])
+        else:
+            studio.progress_update(character,'weapon','正在按白底直立武器预设重建')
+            result=generate(studio.BASE_DIR,studio.BASE_DIR/params['image'],params['name'],studio.BASE_DIR/'.local/weapon-jobs'/job['id'])
+            outputs['weapon']=result['id'];persist()
+            studio.progress_update(character,'weapon','武器已生成，请检查多角度模型并确认握点',status='waiting')
     elif action == 'equipment':
         from equipment import edit
-        outputs['equipment'] = str(edit(character, params['batch'], params.get('equipment_id')).relative_to(studio.BASE_DIR))
+        outputs['equipment'] = str(edit(character, params['batch'], params.get('equipment_id'),params.get('weapon_id')).relative_to(studio.BASE_DIR))
     elif action == 'review':
         from review_character import review
         outputs['review'] = str(review(character, params['batch'], capture_only=True).relative_to(studio.BASE_DIR))
@@ -118,7 +127,7 @@ def main():
     except BaseException as exc:
         traceback.print_exc()
         job.update(status='failed', error=str(exc), finished_at=stamp())
-        failure_stage={'reconstruct':'reconstruction','prepare':'prepare','rig':'rig','download':'download','review':'review','equipment':'equipment','bake':'render'}.get(job['action'],'validate')
+        failure_stage={'reconstruct':'reconstruction','prepare':'prepare','rig':'rig','download':'download','review':'review','equipment':'equipment','bake':'render','weapon':'weapon'}.get(job['action'],'validate')
         studio.progress_update(job['character'], failure_stage, str(exc), status='failed')
     finally:
         save(path, job)

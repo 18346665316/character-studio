@@ -251,8 +251,9 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
     project = job / 'godot'
     shutil.copytree(BASE_DIR / 'pipeline/godot', project, ignore=shutil.ignore_patterns('.godot'))
     if equipment_config:
-        from equipment import copy_runtime
+        from equipment import copy_runtime, stage_model
         copy_runtime(BASE_DIR, project)
+        stage_model(equipment_config,BASE_DIR/'workspaces'/character/'equipment'/equipment_id/'weapon.glb',project)
         (project / 'equipment.json').write_text(json.dumps(equipment_config, indent=2))
     inputs = project / 'animations'
     inputs.mkdir()

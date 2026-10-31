@@ -101,7 +101,10 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
             viewport.queue_free()
             return false
         var helper = load("res://equipment_runtime.gd")
-        helper.attach(skeleton,config)
+        if helper.attach(skeleton,config) == null:
+            push_error("Could not load equipment weapon")
+            viewport.queue_free()
+            return false
     var selected := ""
     var length := 0.0
     for name in player.get_animation_list():

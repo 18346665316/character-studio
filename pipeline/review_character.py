@@ -72,8 +72,10 @@ def review(character, batch, capture_only=False, equipment_editor=None):
         if config.get('files') == receipt['files']:
             spec['reviewed_accessory_faces'] = config.get('reviewed_accessory_faces', [])
     if equipment_editor:
-        from equipment import copy_runtime
+        from equipment import copy_runtime, stage_model
         copy_runtime(root, project)
+        if equipment_editor.get('model'):
+            stage_model(equipment_editor['draft'],equipment_editor['model'],project)
         shutil.copy2(root / 'pipeline/equipment/editor.gd', project / 'equipment_editor.gd')
         shutil.copy2(root / 'pipeline/equipment/handles.gd', project / 'equipment_handles.gd')
         spec.update(equipment_draft=equipment_editor['draft'], equipment_output=equipment_editor['output'],
