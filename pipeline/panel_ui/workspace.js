@@ -3,7 +3,7 @@
 let libraryOpen=true,activePage='character';
 const pageLabels={character:'人物',actions:'动作',equipment:'装备',sheets:'交付',sequence:'编排'};
 const pageDescriptions={character:'确认人物外观与骨骼，建立可复用的角色。',actions:'管理 Mixamo 原动作，检查姿态与变形。',equipment:'管理武器模型，设置人物握持与动作中的持用状态。',sheets:'生成、检查、精简和下载游戏图集。',sequence:'组织原动作，生成统一取景的连续预览。'};
-function pageFor(value){return ({model:'character',rig:'character',animation:'actions',equipment:'equipment',weapon:'equipment',sheet:'sheets',quality:'sheets',sequence:'sequence',actions:'actions',sheets:'sheets',weapons:'equipment'})[value.type]||'character';}
+function pageFor(value){return ({model:'character',rig:'character',animation:'actions',equipment:'equipment',weapon:'equipment',sheet:'sheets',quality:'sheets',sequence:'sequence',actions:'actions',sheets:'sheets',action_set_advanced:'sheets',weapons:'equipment'})[value.type]||'character';}
 function goPage(page){
  const types={character:'model',actions:'actions',equipment:'equipment',sheets:'sheets',sequence:'sequence'};
  choose({type:types[page]});
@@ -38,15 +38,15 @@ function sectionHeading(title,description,...actions){const row=node('div',undef
 function tag(text,tone=''){return node('span',text,'status-tag '+tone);}
 function renderWorkspace(force=false){
  if(!state?.selected||libraryOpen)return;const c=state.selected;activePage=pageFor(selection);$('empty').hidden=true;$('workspace').hidden=false;$('character-title').textContent=c.display_name;$('open-export').disabled=false;
- const {progress,...assets}=c;const signature=JSON.stringify([assets,state.jobs.map(j=>[j.id,j.status,j.attempts]),state.weapons,selection,busy]);
- renderSetup(c);renderTasks();if(!force&&viewKey===signature)return;
+ const {progress,...assets}=c;const signature=JSON.stringify([assets,state.jobs.map(j=>[j.id,j.status,j.attempts,j.action==='produce'?[j.outputs?.production?.stage,j.outputs?.production?.roles]:null]),state.weapons,selection,busy]);
+ renderSetup(c);renderTasks();const liveProgress=$('production-live-progress');if(liveProgress)liveProgress.textContent=progress?.message||'正在启动整套生产任务…';if(!force&&viewKey===signature)return;
  // Keep focused form controls intact during background polling.
  if(!force&&$('controls').contains(document.activeElement)&&['INPUT','SELECT'].includes(document.activeElement?.tagName))return;
  viewKey=signature;stopPlayback();$('delivery-action-list')?.remove();$('detail-layout').classList.remove('delivery-layout');$('page-library').replaceChildren();$('page-tabs').replaceChildren();$('preview-content').replaceChildren();$('controls').replaceChildren();$('preview-meta').textContent='';$('viewport-note').textContent='';$('detail-layout').hidden=true;
  if(activePage==='character'){detail();tab('模型与外观',()=>choose({type:'model'}),selection.type!=='rig');tab('骨骼绑定',()=>choose({type:'rig'}),selection.type==='rig');if(selection.type==='rig')renderRig(c);else renderModel(c);}
  else if(activePage==='actions'){if(selection.type==='animation'){detail();tab('← 动作库',()=>goPage('actions'),false);renderAnimation(c);}else renderActionLibrary(c);}
  else if(activePage==='equipment')renderEquipmentWorkspace(c);
- else if(activePage==='sheets'){if(selection.type==='quality')tab('← 返回交付',()=>goPage('sheets')); if(selection.type==='quality'){detail();renderQuality(c);}else if(selection.type==='sheet'){detail();renderSheet(c);}else renderSheetLibrary(c);}
+ else if(activePage==='sheets'){if(selection.type==='quality')tab('← 返回交付',()=>goPage('sheets')); if(selection.type==='quality'){detail();renderQuality(c);}else if(selection.type==='action_set_advanced'){tab('← 整套生产',()=>goPage('sheets'));renderActionSetAdvanced(c);}else if(selection.type==='sheet'){tab('← 角色动作集',()=>goPage('sheets'));detail();renderSheet(c);}else renderActionSet(c);}
  else{detail();renderSequence(c);}
 }
 function renderActionLibrary(c){
@@ -142,7 +142,7 @@ function renderSheet(c){
  controls.append(details('高级配色设置',note('仅在需要跨人物或跨动作复用指定配色时使用。一般保持自动处理即可。'),field('复用调色板',paletteReuse),...(appliedPalette?[note('当前成果已保存配色；只调整帧精简时会继续使用。')]:[])));
 
  const download=link(selection.compareRaw?'导出原色对照动作':'导出当前动作',(selection.compareRaw&&!(item.comparison&&chosen!==baseItem)?raw:d).export+'&clip='+encodeURIComponent(item.name)+'&variant='+(selection.compareRaw&&item.comparison&&chosen!==baseItem?'comparison':chosen===baseItem?'source':'game'));download.classList.add('delivery-export');
- controls.append(apply,download,button('导出 Godot 人物包',openGamePackage,'full',!readyServer()));
+ controls.append(apply,download,button('用于角色动作集',()=>adoptSetCandidate(d,item),'full',!readyServer()));
  const siblings=c.deliveries.filter(x=>x.kind!=='sequence'&&x.clips.some(i=>i.name===item.name));controls.append(details(`版本历史 · ${siblings.length}`,field('查看版本',select(siblings.map(x=>[x.id,deliveryTitle(x)]),d.id,id=>selectDelivery(id,item.name))),note('切换版本会保留该动作的浏览选择；历史产物不会覆盖。')));
  const qualityDetails=details('质量与使用限制',note('自动检查不代表动作语义、美术或循环接缝已验收。'));for(const w of quality?.warnings||[])qualityDetails.append(note(w.message));if(quality?.loop?.status==='review')qualityDetails.append(note('循环：'+quality.loop.message));controls.append(qualityDetails);
  controls.append(details('渲染设置与来源',properties([['渲染器',rendererName(d.renderer)],['画布',item.info.frame_width+' × '+item.info.frame_height],['脚底锚点',item.info.anchor_px?.map(v=>Number(v).toFixed(1)).join(', ')],['记录',deliveryTitle(d)]]),note('改变尺寸、视角或装备需要重新渲染。'),button('重新配置渲染',()=>openExport(d.batch,[item.name+'.fbx']),'full',blocked()),button('查看全部质量记录',()=>choose({type:'quality'}),'full')));
@@ -176,4 +176,105 @@ function openGamePackage(){
   const selections=Object.fromEntries(Object.entries(choices).map(([role,id])=>{const [delivery,clip]=id.split('/');return [role,{delivery,clip}];}));
   try{status.textContent='正在检查并打包…';const urlBase='/api/game-package?character='+encodeURIComponent(selected)+'&variant='+variant+'&selections='+encodeURIComponent(JSON.stringify(selections));const check=await fetch(urlBase+'&inspect=1'),report=await check.json();if(!check.ok)throw Error(report.error||'检查失败');const response=await fetch(urlBase);if(!response.ok){const data=await response.json();throw Error(data.error||'导出失败');}const blob=await response.blob(),url=URL.createObjectURL(blob),a=node('a');a.href=url;a.download=selected+'-godot.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);status.textContent='已导出。解压后打开 project.godot 预览；已有项目复制 character_assets 文件夹。'+(report.warnings.length?' 需复核：'+report.warnings.join('；'):'');}catch(e){status.textContent=e.message;}
  },'primary full'));document.body.append(dialog);dialog.showModal();
+}
+
+// Adopted actions are project data; browsing candidates never replaces them.
+const actionSetDrafts=new Map();
+function actionSetDraft(c){
+ if(!actionSetDrafts.has(c.id))actionSetDrafts.set(c.id,JSON.parse(JSON.stringify(c.action_set||{title:'角色动作集',revision:0,actions:{idle:{loop:true},walk:{loop:true},run:{loop:true},jump:{loop:false}}})));
+ return actionSetDrafts.get(c.id);
+}
+function setRecipeKey(recipe){return JSON.stringify({title:recipe.title,actions:Object.fromEntries(Object.entries(recipe.actions).map(([role,a])=>[role,{delivery:a.delivery,clip:a.clip,variant:a.variant||'game',loop:!!a.loop,reviewed:!!a.reviewed}]))});}
+function setOptions(c){return sequenceOptions(c).filter(o=>!o.delivery.heading_stale);}
+function setEntry(c,choice){if(!choice?.delivery)return null;const option=setOptions(c).find(o=>o.id===choice.delivery+'/'+choice.clip);if(!option)return null;return {...option,shown:choice.variant==='source'?option.item:option.item.game?gameItem(option.item):null};}
+function setPreviewBounds(c,draft){
+ const entries=Object.values(draft.actions).map(a=>setEntry(c,a)?.shown?.info).filter(i=>i?.anchor_px?.length===2);
+ const left=Math.max(48,...entries.map(i=>i.anchor_px[0])),right=Math.max(48,...entries.map(i=>i.frame_width-i.anchor_px[0]));
+ const top=Math.max(110,...entries.map(i=>i.anchor_px[1])),bottom=Math.max(20,...entries.map(i=>i.frame_height-i.anchor_px[1]));
+ return {width:Math.ceil(left+right+16),height:Math.ceil(top+bottom+16),ground:[Math.ceil(left+8),Math.ceil(top+8)]};
+}
+async function saveActionSet(){
+ const c=state.selected,draft=actionSetDraft(c);if(blocked())return;busy=true;
+ try{const result=await api('/api/action-set',{character:c.id,...draft});actionSetDrafts.set(c.id,result.recipe);notify(result.validation.complete?'动作集已保存。':'动作集已保存为草稿，请补齐检查项。');await refresh(true);}catch(e){notify(e.message,true);}finally{busy=false;renderWorkspace(true);}
+}
+function adoptSetCandidate(delivery,item){
+ const c=state.selected,draft=actionSetDraft(c);const roles=Object.keys(draft.actions);let role=prefs().setRole;if(!roles.includes(role))role=roles[0];
+ const dialog=node('dialog');dialog.append(node('h2','采用动作成果'),note(item.name+' · '+deliveryTitle(delivery)),field('动作槽位',select(roles.map(r=>[r,ROLE_LABELS[r]?r+' · '+ROLE_LABELS[r]:r]),role,v=>role=v)),button('放入动作集草稿',()=>{draft.actions[role]={delivery:delivery.id,clip:item.name,variant:prefs().frameVariant==='source'?'source':'game',loop:!!draft.actions[role].loop,reviewed:false};prefs().setRole=role;remember();dialog.close();choose({type:'action_set_advanced'});},'primary'),button('取消',()=>dialog.close()));dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
+}
+function renderActionSetAdvanced(c){
+ detail();const draft=actionSetDraft(c),roles=Object.keys(draft.actions);let role=prefs().setRole;if(!roles.includes(role))role=roles[0];
+ const choice=draft.actions[role],entry=setEntry(c,choice),controls=$('controls'),content=$('preview-content');
+ const dirty=!c.action_set||setRecipeKey(draft)!==setRecipeKey(c.action_set),validation=c.action_set_validation;
+ setTitles('ACTION SET',draft.title,'当前动作');
+ const list=node('aside',undefined,'delivery-action-list');list.id='delivery-action-list';list.append(node('h3','角色动作集'));
+ for(const r of roles){const a=draft.actions[r],e=setEntry(c,a),row=button('',()=>{prefs().setRole=r;remember();renderWorkspace(true);},'delivery-action'+(r===role?' selected':''));
+ const copy=node('span');copy.append(node('strong',r),node('small',!e?.shown?'待选择成果':(a.reviewed?'已人工验收':'待验收')+' · '+e.shown.info.frame_count+' 帧'));if(e?.shown?.gif){const img=node('img');img.src=e.shown.gif;img.alt='';row.append(img);}row.append(copy);list.append(row);}
+ list.append(button('浏览候选成果',()=>{const groups=sheetGroups(c);if(groups.length){const v=groups[0].versions[0];choose({type:'sheet',delivery:v.delivery.id,clip:v.item.name});}else openExport();},'full'));
+ const add=node('input');add.placeholder='attack / 自定义英文标识';add.setAttribute('aria-label','新动作标识');list.append(add,button('＋ 添加动作槽位',()=>{const r=add.value.trim();if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(r)||draft.actions[r]||roles.length>=32){notify('请输入不重复的英文动作标识，最多32个。',true);return;}draft.actions[r]={loop:false,reviewed:false};prefs().setRole=r;remember();renderWorkspace(true);},'full'));
+ $('detail-layout').classList.add('delivery-layout');$('detail-layout').prepend(list);
+ const toolbar=node('div',undefined,'delivery-preview-tools');toolbar.append(tag(dirty?'有未保存修改':'已保存'),select([[1,'1× 实际像素'],[2,'2×'],[3,'3×']],prefs().spriteZoom||1,v=>{prefs().spriteZoom=Number(v);remember();renderWorkspace(true);}));content.append(toolbar);
+ if(entry?.shown){mountPlayer(entry.shown);if(player){player.loop=choice.loop;player.anchorPreview={...setPreviewBounds(c,draft),anchor:entry.shown.info.anchor_px};player.canvas.width=player.anchorPreview.width;player.canvas.height=player.anchorPreview.height;const z=Number(prefs().spriteZoom)||1;player.canvas.style.width=player.canvas.width*z+'px';player.canvas.style.height=player.canvas.height*z+'px';}}
+ else content.append(placeholder('为 '+role+' 选择动作成果','从右侧选择已生成的图集。所有动作在同一脚底位置、以相同倍率预览。'));
+ content.append(note('十字线是统一脚底原点。切换左侧动作检查比例、位置与风格；单次动作播放结束停在末帧。'));
+ const options=setOptions(c);controls.append(node('h3',role),field('采用成果',select([['','请选择成果'],...options.map(o=>[o.id,o.title+' · '+(o.item.info.body_height_px||'?')+'px · '+deliveryTitle(o.delivery)])],choice.delivery?choice.delivery+'/'+choice.clip:'',v=>{const [delivery,clip]=v.split('/');draft.actions[role]={...(delivery?{delivery,clip,variant:choice.variant||'game'}:{}),loop:!!choice.loop,reviewed:false};renderWorkspace(true);})),field('采样版本',select([['game','游戏精简版'],['source','完整采样版']],choice.variant||'game',v=>{choice.variant=v;choice.reviewed=false;renderWorkspace(true);})),field('播放方式',select([['loop','循环播放'],['once','单次播放']],choice.loop?'loop':'once',v=>{choice.loop=v==='loop';choice.reviewed=false;renderWorkspace(true);})));
+ if(choice.delivery&&!entry)controls.append(note('采用来源已不可用，请重新选择。'));
+ if(entry&&!entry.shown)controls.append(note('此成果没有精简版，请选择完整采样版或先生成精简版。'));
+ if(entry)controls.append(button('调整此动作的颜色与精简',()=>choose({type:'sheet',delivery:choice.delivery,clip:choice.clip}),'full'));
+ const reviewed=node('input');reviewed.type='checkbox';reviewed.checked=!!choice.reviewed;reviewed.disabled=!entry?.shown;reviewed.onchange=()=>{choice.reviewed=reviewed.checked;renderWorkspace(true);};const label=node('label',undefined,'check-row');label.append(reviewed,node('span','已检查姿态、风格及循环/结束效果'));controls.append(label);
+ if(roles.length>1)controls.append(button('移除此槽位',()=>{delete draft.actions[role];renderWorkspace(true);},'full'));
+ const title=node('input');title.value=draft.title;title.onchange=()=>{draft.title=title.value;renderWorkspace(true);};controls.append(field('动作集名称',title),button('保存动作集',saveActionSet,'primary full',blocked()||!readyServer()||!dirty));
+ if(!dirty&&validation){const report=node('div',undefined,'action-set-validation');report.append(node('strong',validation.complete?'整套结构检查通过':'动作集尚未就绪'));for(const message of [...validation.errors,...validation.warnings])report.append(note(message));controls.append(report);}
+ else controls.append(note('保存后检查整套动作的绑定、比例、视角、配色、锚点和时序。'));
+ if(!dirty&&validation?.complete)controls.append(link('导出整套 Godot 人物包','/api/action-set/export?character='+encodeURIComponent(c.id)));
+ else controls.append(button('导出整套 Godot 人物包',()=>{},'full',true));
+ $('viewport-note').textContent=dirty?'当前为动作集草稿；保存后才能整套导出。':'预览与整套导出使用已保存的动作集。生成新版本不会自动替换。';
+}
+
+// The primary workflow produces a whole set. Individual adoption remains advanced.
+const productionDrafts=new Map();
+function productionConfig(value){return {title:value.title||'角色动作集',actions:value.actions,renderer:value.renderer||'godot',view:value.view||'three_quarter',body_height:value.body_height||96,supersample:value.supersample||4,colors:value.colors??64,profile:value.profile||'balanced',equipment_id:value.equipment_id||null};}
+function productionDraft(c){
+ if(!productionDrafts.has(c.id)){const preset=state.action_presets?.[0];productionDrafts.set(c.id,c.production?.config?JSON.parse(JSON.stringify(productionConfig(c.production.config))):productionConfig({actions:(preset?.actions||[{role:'idle',title:'Breathing Idle',loop_intent:true},{role:'walk',title:'Walking',loop_intent:true},{role:'run',title:'Running',loop_intent:true},{role:'jump',title:'Standing Jump',loop_intent:false}]).map(a=>({role:a.role,title:a.title,loop:a.loop_intent}))}));}
+ return productionDrafts.get(c.id);
+}
+function editProductionActions(c){
+ const current=productionDraft(c),actions=JSON.parse(JSON.stringify(current.actions)),dialog=node('dialog');dialog.className='production-actions-dialog';
+ const top=node('div',undefined,'dialog-top');top.append(node('h2','整套动作清单'),button('关闭',()=>dialog.close()));dialog.append(top,note('填写 Mixamo 完整英文标题。整套共用输出规格，生成时自动复用已有原动作并下载缺失项。'));
+ const rows=node('div');const paint=()=>{rows.replaceChildren();for(const [i,a]of actions.entries()){
+  const row=node('div',undefined,'production-action-edit'),role=node('input'),title=node('input');role.value=a.role;role.placeholder='动作标识';role.setAttribute('aria-label','动作标识 '+(i+1));title.value=a.title;title.placeholder='Mixamo title';title.setAttribute('aria-label','Mixamo 标题 '+(i+1));
+  role.oninput=()=>a.role=role.value.trim();title.oninput=()=>a.title=title.value.trim();row.append(role,title,select([['loop','循环'],['once','单次']],a.loop?'loop':'once',v=>a.loop=v==='loop'),link('查找','https://www.mixamo.com/#/?page=1&query='+encodeURIComponent(a.title||''),true),button('移除',()=>{actions.splice(i,1);paint();}));rows.append(row);
+ }};paint();dialog.append(rows,button('＋ 添加动作',()=>{if(actions.length<12){actions.push({role:'',title:'',loop:false});paint();}}),button('使用基础移动预设',()=>{const preset=state.action_presets?.[0];if(preset){actions.splice(0,actions.length,...preset.actions.map(a=>({role:a.role,title:a.title,loop:a.loop_intent})));paint();}}));
+ const status=note('动作标识供游戏使用，例如 idle、attack；标题决定下载哪个表演。');dialog.append(status,button('使用这套清单',()=>{if(!actions.length||actions.some(a=>!a.title||!a.role)||new Set(actions.map(a=>a.role)).size!==actions.length){status.textContent='请填写不重复的标识和完整标题，至少保留一个动作。';return;}current.actions=actions;dialog.close();renderWorkspace(true);},'primary full'));
+ dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
+}
+function renderActionSet(c){
+ detail();const draft=productionDraft(c),controls=$('controls'),content=$('preview-content'),jobs=ownJobs().filter(j=>j.action==='produce'),job=jobs[0];
+ const sameJob=job&&JSON.stringify(productionConfig(job.params))===JSON.stringify(draft),running=sameJob&&isRunning(job),failed=sameJob&&['failed','interrupted'].includes(job.status);
+ const result=sameJob&&job.outputs?.result&&!job.outputs?.action_set?job.outputs.result:c.action_set;
+ const configChanged=!!c.action_set&&(!c.production?.config||JSON.stringify(productionConfig(c.production.config))!==JSON.stringify(draft));
+ let role=prefs().productionRole;if(!draft.actions.some(a=>a.role===role))role=draft.actions[0]?.role;
+ const entry=setEntry(c,result?.actions?.[role]);
+ setTitles('ACTION SET',draft.title,'整套输出方案');
+ const list=node('aside',undefined,'delivery-action-list');list.id='delivery-action-list';list.append(node('h3',draft.actions.length+' 个动作'),button('编辑动作清单',()=>editProductionActions(c),'full',blocked()));
+ for(const action of draft.actions){const choice=result?.actions?.[action.role],e=setEntry(c,choice),status=sameJob?job.outputs?.production?.roles?.[action.role]:null,row=button('',()=>{prefs().productionRole=action.role;remember();renderWorkspace(true);},'delivery-action'+(role===action.role?' selected':''));
+ const text=node('span');text.append(node('strong',action.role),node('small',action.title),node('small',status?.status==='failed'?'生成失败':status?.status==='ready'?'已生成':status?.status==='source_ready'?'原动作就绪':e?.shown?'已有成果':'待生成'));
+ if(e?.shown?.gif){const image=node('img');image.src=e.shown.gif;image.alt='';row.append(image);}row.append(text);list.append(row);
+ }
+ $('detail-layout').classList.add('delivery-layout');$('detail-layout').prepend(list);
+ const tools=node('div',undefined,'delivery-preview-tools');tools.append(tag(running?'整套生成中':failed?'部分步骤未完成':configChanged?'方案未生成 · 显示已发布成果':c.action_set?'当前动作集':'尚未生成'),select([[1,'1× 实际像素'],[2,'2×'],[3,'3×']],prefs().spriteZoom||1,v=>{prefs().spriteZoom=Number(v);remember();renderWorkspace(true);}));content.append(tools);
+ if(entry?.shown){mountPlayer(entry.shown);if(player){player.loop=!!result.actions[role].loop;player.anchorPreview={...setPreviewBounds(c,result),anchor:entry.shown.info.anchor_px};player.canvas.width=player.anchorPreview.width;player.canvas.height=player.anchorPreview.height;const z=Number(prefs().spriteZoom)||1;player.canvas.style.width=player.canvas.width*z+'px';player.canvas.style.height=player.canvas.height*z+'px';}}
+ else content.append(placeholder('一键生成整套角色动作','设置一次规格，Studio 自动准备原动作、渲染、共享配色和精简，无需逐个选择图集版本。'));
+ if(running){const live=node('div',c.progress?.message||'正在启动整套生产任务…','callout');live.id='production-live-progress';content.append(live);}
+ if(failed){const errors=Object.entries(job.outputs?.production?.roles||{}).filter(([,r])=>r.status==='failed');for(const [r,item]of errors)content.append(node('div',r+'：'+item.error,'callout'));if(!errors.length)content.append(node('div',job.error||'任务中断，可继续。','callout'));}
+ if(entry?.shown)content.append(note((running?'生成期间显示上一套已发布成果。':failed?'当前为本次已完成的候选结果，正式动作集保持不变。':configChanged?'当前显示已发布成果，修改后的方案在生成完成后生效。':'切换左侧动作检查整套效果。')+' 十字线是统一脚底位置。'));
+ const title=node('input');title.value=draft.title;title.onchange=()=>{draft.title=title.value;renderWorkspace(true);};controls.append(field('动作集名称',title));
+ const change=(key,value)=>{draft[key]=value;renderWorkspace(true);};
+ controls.append(field('人物像素高度',select([[48,'48px'],[64,'64px'],[96,'96px（推荐）'],[128,'128px']],draft.body_height,v=>change('body_height',Number(v)))),field('视角',select([['three_quarter','四分之三'],['front','正面'],['side','侧面']],draft.view,v=>change('view',v))),field('整套颜色',select([[0,'保留原色'],[32,'共享 32 色'],[64,'共享 64 色'],[128,'共享 128 色']],draft.colors,v=>change('colors',Number(v)))),field('帧精简',select([['balanced','推荐'],['smooth','更多细节'],['compact','更少帧']],draft.profile,v=>change('profile',v))),field('装备',select([['','空手'],...c.equipment.map(e=>[e.id,e.weapon_name||'标准剑'])],draft.equipment_id||'',v=>change('equipment_id',v||null))));
+ controls.append(details('高级渲染设置',field('渲染器',select([['godot','Godot'],['blender','Blender · Eevee']],draft.renderer,v=>change('renderer',v))),field('超采样',select([[4,'4 倍'],[2,'2 倍'],[1,'关闭']],draft.supersample,v=>change('supersample',Number(v))))));
+ controls.append(button(running?'正在生成整套动作…':failed?'继续生成 · 只补未完成步骤':'生成整套动作',()=>failed?mutation('/api/tasks',{character:selected,retry:job.id}):start('produce',productionConfig(draft)),'primary full',blocked()||!readyServer()||!c.rig.ready||!draft.actions.length));
+ controls.append(note(!c.rig.ready?'先完成人物骨骼绑定。绑定后，动作生产可一次完成。':'自动复用已有原动作与本流程的渲染缓存；只下载缺失动作。共享配色后分别精简，全部通过结构检查再发布。'));
+ if(c.action_set&&c.action_set_validation?.complete&&!running&&!failed)controls.append(link(configChanged?'导出已发布人物包':'导出整套 Godot 人物包','/api/action-set/export?character='+encodeURIComponent(c.id)));
+ if(c.action_set&&!running&&!failed)controls.append(details('整套检查报告',...(c.action_set_validation?.errors||[]).map(note),...(c.action_set_validation?.warnings||[]).map(note)));
+ controls.append(details('高级管理',button('管理采用版本与单动作验收',()=>choose({type:'action_set_advanced'}),'full'),button('浏览已有图集',()=>{const groups=sheetGroups(c);if(groups.length){const v=groups[0].versions[0];choose({type:'sheet',delivery:v.delivery.id,clip:v.item.name});}else openExport();},'full')));
+ $('viewport-note').textContent='生成完成后仍需整体目视检查。Mixamo 首次登录与人工骨骼绑定不包含在自动生产中。';
 }

@@ -20,9 +20,9 @@ from task_lock import acquire, serialized, TaskBusyError
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'import_model','optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact', 'palette'}
+ACTIONS = {'import_model','optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact', 'palette', 'produce'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'import_model':'导入外部模型','optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简','palette':'颜色简化'}
+          'import_model':'导入外部模型','optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简','palette':'颜色简化','produce':'整套动作生产'}
 
 
 def now():
@@ -132,6 +132,9 @@ class Panel(AssetRepository):
         if action not in ACTIONS or not isinstance(params, dict):
             raise ValueError('不支持的操作')
         clean = {}
+        if action == 'produce':
+            from production import plan
+            return plan(self,character,params)
         if action == 'sequence':
             from sequence_render import make_plan
             plan=make_plan(self,character,params.get('recipe',{}))
@@ -429,13 +432,17 @@ def handler(panel):
                     with panel.mutex:
                         panel.recover_jobs()
                         from action_presets import PRESETS
-                        result = {'action_presets':PRESETS,'api_version':22,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'action_presets':PRESETS,'api_version':24,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         from palette_delivery import catalog as palette_catalog
                         result['palettes']=palette_catalog(panel.root)
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
                             result['selected'] = panel.character(query['character'][0])
+                            from action_set import load as load_set, inspect as inspect_set
+                            result['selected']['action_set']=load_set(panel.root,query['character'][0])
+                            result['selected']['action_set_validation']=inspect_set(panel.root,query['character'][0])
+                            result['selected']['production']=read(panel.root/'workspaces'/query['character'][0]/'production.json',None)
                             from workflow import guidance
                             result['selected']['guidance']=guidance(result['selected'],result['jobs'])
                     return self.respond(result)
@@ -454,6 +461,9 @@ def handler(panel):
                 if parsed.path.startswith('/asset/'):
                     path = panel.asset_path(unquote(parsed.path[len('/asset/'):]))
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path == '/api/action-set/export':
+                    from action_set import export as export_set
+                    return self.respond(export_set(panel.root,query.get('character',[''])[0]),'application/zip')
                 if parsed.path == '/api/game-package':
                     from game_package import build
                     choices=query.get('selections',['{}'])[0]
@@ -493,6 +503,9 @@ def handler(panel):
                     elif route == '/api/equipment/usage':
                         from equipment_usage import save as save_usage
                         result=save_usage(panel.root,name(data.get('character')),name(data.get('equipment')),data.get('default'),data.get('mounts'),data.get('batch'),data.get('file'),data.get('action'))
+                    elif route == '/api/action-set':
+                        from action_set import save as save_set
+                        result=save_set(panel.root,name(data.get('character')),data)
                     elif route == '/api/sequence':
                         result = panel.save_sequence(data)
                     elif route == '/api/tasks':

@@ -27,7 +27,13 @@ def execute(job, persist):
     character, action, params = job['character'], job['action'], job['params']
     ws = studio.workspace(character)
     outputs = job.setdefault('outputs', {})
-    if action == 'reconstruct':
+    if action == 'produce':
+        from production import run
+        def download_action(title, checkpoint, persist_checkpoint):
+            child={'character':character,'action':'download','params':{'actions':[title]},'outputs':checkpoint}
+            execute(child,persist_checkpoint)
+        run(studio.BASE_DIR,job,persist,download_action)
+    elif action == 'reconstruct':
         image = (studio.BASE_DIR / params['image']).resolve()
         if not image.is_relative_to((ws / 'inputs').resolve()) or not image.is_file():
             raise ValueError('原画不在本角色输入目录中')
@@ -146,14 +152,14 @@ def main():
     job.update(status='running', started_at=stamp(), pid=os.getpid(), error=None)
     save(path, job)
     try:
-        if job['action'] in ('bake','sequence','compact','palette'):
+        if job['action'] in ('bake','sequence','compact','palette','produce'):
             studio.progress_update(job['character'],'validate','正在启动新任务，检查输入')
         with task_lock(studio.BASE_DIR, lock_fd):
             execute(job, lambda: save(path, job))
         job.update(status='succeeded', finished_at=stamp())
     except BaseException as exc:
         traceback.print_exc()
-        if job['action'] in ('bake','sequence','compact','palette'):
+        if job['action'] in ('bake','sequence','compact','palette','produce'):
             progress=studio.progress_read(job['character']) or {}
             quality_path=Path(progress.get('job',''))/'quality.json'
             if quality_path.is_file() and quality_path.resolve().is_relative_to((studio.BASE_DIR/'.local/jobs').resolve()):

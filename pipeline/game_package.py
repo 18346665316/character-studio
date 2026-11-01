@@ -8,20 +8,26 @@ ROLES=('idle','walk','run','jump')
 TEMPLATES=Path(__file__).parent/'game_package'
 
 
-def build(root,character,selections,variant='game',report_only=False):
+def build(root,character,selections,variant='game',report_only=False,action_set=False):
     assets=AssetRepository(root);name(character)
     if variant not in ('game','source'): raise ValueError('未知图集版本')
-    if not isinstance(selections,dict) or set(selections)!=set(ROLES): raise ValueError('请为待机、走路、跑步、跳跃各选择一个图集')
+    if not isinstance(selections,dict) or not selections or len(selections)>32: raise ValueError('请选择1–32个动作')
+    if not action_set and set(selections)!=set(ROLES): raise ValueError('请为待机、走路、跑步、跳跃各选择一个图集')
     output={};records={};warnings=[];reference=None;animations=[];resources=[];external=[];resource_count=0
-    for role in ROLES:
+    for role in (selections if action_set else ROLES):
+        name(role)
         choice=selections[role]
         if not isinstance(choice,dict):raise ValueError('非法动作选择')
+        selected_variant=choice.get('variant',variant) if action_set else variant
+        if selected_variant not in ('game','source'):raise ValueError('未知图集版本')
+        loop=choice.get('loop',role in ('idle','walk','run')) if action_set else role in ('idle','walk','run')
+        if type(loop) is not bool:raise ValueError('循环设置须为布尔值')
         delivery=name(choice.get('delivery'));clip=name(choice.get('clip'))
         base=f'deliverables/{character}/{delivery}'
         manifest=json.loads(assets.scoped(base+'/manifest.json',f'deliverables/{character}').read_text())
         if manifest.get('source',{}).get('character')!=character:raise ValueError('图集人物不匹配')
         original=manifest.get(clip+'_spritesheet.png',{})
-        info=original.get('game') if variant=='game' else original
+        info=original.get('game') if selected_variant=='game' else original
         if not info:raise ValueError(f'{role} 缺少所选版本，请先生成精简版或选择完整版本')
         projection=info.get('projection',{})
         anchor=info.get('anchor_px');body=info.get('body_height_px')
@@ -35,7 +41,7 @@ def build(root,character,selections,variant='game',report_only=False):
         if type(count)is not int or not 0<count<=4096 or type(size)is not int or size!=height or not 0<size<=1024 or not isinstance(duration,(int,float)) or not math.isfinite(duration) or duration<=0:raise ValueError('无效图集尺寸或时序')
         durations=info.get('frame_durations_seconds',[duration/count]*count)
         if len(durations)!=count or any(not isinstance(v,(int,float)) or not math.isfinite(v) or v<=0 for v in durations) or abs(sum(durations)-duration)>1e-5:raise ValueError('逐帧时长不匹配')
-        sheet=assets.scoped(base+('/game/' if variant=='game' else '/')+clip+'_spritesheet.png',f'deliverables/{character}/{delivery}')
+        sheet=assets.scoped(base+('/game/' if selected_variant=='game' else '/')+clip+'_spritesheet.png',f'deliverables/{character}/{delivery}')
         raw=sheet.read_bytes()
         with Image.open(io.BytesIO(raw)) as im:
             if im.width%size or im.height%size or count>im.width//size*(im.height//size):raise ValueError('图集容量不匹配')
@@ -59,14 +65,18 @@ detect_3d/compress_to=0
             # Each region's origin is the common ground anchor, including mirrored sprites.
             resources.append(f'[sub_resource type="AtlasTexture" id="{rid}"]\natlas = ExtResource("{role}")\nregion = Rect2({i%cols*size}, {i//cols*size}, {size}, {size})')
             frames.append(f'{{"duration": {seconds:.12f}, "texture": SubResource("{rid}")}}')
-        animations.append('{"name": &"'+role+'", "speed": 1.0, "loop": '+('true' if role in ('idle','walk','run') else 'false')+', "frames": ['+',\n'.join(frames)+']}')
-        records[role]={'role_assignment':'user_selected','semantic_validation':'unverified','texture':'assets/textures/'+role+'.png','equipment':manifest.get('equipment'),'quality':original.get('quality',{}),'color_processing':manifest.get('color_processing'),'delivery':delivery,'clip':clip,'variant':variant,'frame_count':count,'duration_seconds':duration,'frame_durations_seconds':durations,'loop':role in ('idle','walk','run'),'anchor_px':anchor,'frame_size':size,'sha256':assets.digest(sheet)}
+        animations.append('{"name": &"'+role+'", "speed": 1.0, "loop": '+('true' if loop else 'false')+', "frames": ['+',\n'.join(frames)+']}')
+        records[role]={'role_assignment':'user_selected','semantic_validation':'unverified','texture':'assets/textures/'+role+'.png','equipment':manifest.get('equipment'),'quality':original.get('quality',{}),'color_processing':manifest.get('color_processing'),'delivery':delivery,'clip':clip,'variant':selected_variant,'frame_count':count,'duration_seconds':duration,'frame_durations_seconds':durations,'loop':loop,'anchor_px':anchor,'frame_size':size,'sha256':assets.digest(sheet)}
+        if action_set:
+            records[role]['manual_review']='user_confirmed' if choice.get('reviewed') else 'pending'
+            if not choice.get('reviewed'):warnings.append(role+'：尚未人工验收动作与循环效果')
         quality=original.get('quality',{})
         if quality.get('status')=='failed':raise ValueError('所选动作未通过质量检查')
         if quality.get('status')=='review':warnings.append(role+'：存在需人工复核的画面提示')
-        if role in ('idle','walk','run') and quality.get('loop',{}).get('status')!='passed':warnings.append(role+'：循环接缝尚未验收，预览中已按用途开启循环')
+        if loop and quality.get('loop',{}).get('status')!='passed' and not (action_set and choice.get('reviewed')):warnings.append(role+'：循环接缝尚未验收，预览中已按用途开启循环')
     output['animations.tres']=('[gd_resource type="SpriteFrames" load_steps='+str(resource_count+5)+' format=3]\n'+ '\n\n'.join(external+resources)+'\n[resource]\nanimations = ['+',\n'.join(animations)+']\n').encode()
-    output['character.gd']=(TEMPLATES/'character.gd').read_bytes()
+    default_action='idle' if 'idle' in records else next(iter(records))
+    output['character.gd']=(TEMPLATES/'character.gd').read_bytes().replace(b'play_action("idle")',('play_action("'+default_action+'")').encode())
     # Change sprite offset per animation, maintaining each exported anchor precisely.
     offsets={role:[r['frame_size']/2-r['anchor_px'][0],r['frame_size']/2-r['anchor_px'][1]] for role,r in records.items()}
     output['character.gd']+= ('\nconst OFFSETS = '+json.dumps(offsets)+'\n').encode()
@@ -80,7 +90,8 @@ script = ExtResource("1")
 sprite_frames = ExtResource("2")
 animation = &"idle"
 '''
-    output['preview.gd']=(TEMPLATES/'preview.gd').read_bytes()
+    output['character.tscn']=output['character.tscn'].replace(b'animation = &"idle"',('animation = &"'+default_action+'"').encode())
+    output['preview.gd']=(TEMPLATES/'preview.gd').read_bytes().replace(b'["idle","walk","run","jump"]',json.dumps(list(records)).encode())
     output['preview.tscn']=b'[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="preview.gd" id="1"]\n[node name="Preview" type="Node2D"]\nscript = ExtResource("1")\n'
     report={'schema':1,'character':character,'body_height_px':reference[1],'view':reference[2],'reference_sha256':reference[0],'pixels_per_source_unit':reference[3],'renderer':reference[4],'actions':records,'warnings':warnings,'scope':'Asset playback only; no movement, physics or gameplay state machine.'}
     reused={}

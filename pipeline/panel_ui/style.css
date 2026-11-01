@@ -34,3 +34,4 @@ dialog{border:1px solid var(--line);border-radius:12px;padding:26px;width:min(51
 @media(max-width:650px){.delivery-layout{grid-template-columns:1fr}.delivery-action-list{max-height:90px}.delivery-layout .viewport-panel{min-height:430px}}
 
 .delivery-export{background:var(--accent);color:white;border-color:var(--accent)}
+.production-actions-dialog{width:min(900px,95vw)}.production-action-edit{display:grid;grid-template-columns:110px minmax(160px,1fr) 95px auto auto;gap:8px;align-items:center;margin:10px 0}.production-action-edit input{min-width:0}@media(max-width:700px){.production-action-edit{grid-template-columns:90px minmax(100px,1fr)}.production-action-edit select{grid-column:1}}

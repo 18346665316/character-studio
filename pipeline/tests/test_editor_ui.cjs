@@ -73,3 +73,17 @@ const payload=presetPayload();
 if(payload.roles.Jogging!=='run'||payload.roles.Running||payload.preset.id!=='basic_movement')throw Error('Preset replacement lost role or source');
 if(payload.actions.join(',')!=='Breathing Idle,Jogging')throw Error('Preset request not updated');
 `,context);
+
+vm.runInContext(`
+const adopted={id:'adopted',action_set:{title:'Set',revision:2,actions:{walk:{delivery:'v1',clip:'walk',variant:'game',loop:true,reviewed:true}}}};
+const setDraft=actionSetDraft(adopted);
+setDraft.actions.walk.delivery='v2';
+if(adopted.action_set.actions.walk.delivery!=='v1')throw Error('Draft must not replace the saved action set');
+if(actionSetDraft({...adopted,action_set:{...adopted.action_set,revision:3}})!==setDraft)throw Error('Polling must not discard a draft');
+if(setRecipeKey(setDraft)===setRecipeKey(adopted.action_set))throw Error('Version replacement must mark the set dirty');
+setDraft.actions.walk.delivery='v1';
+if(setRecipeKey(setDraft)!==setRecipeKey(adopted.action_set))throw Error('Revision and metadata must not mark identical choices dirty');
+const anchored={frame:0,count:1,w:64,h:64,canvas:{width:180,height:200},anchorPreview:{ground:[90,150],anchor:[30,55]},img:{naturalWidth:64},ctx:{clearRect(){},drawImage(...args){drawArgs=args;},beginPath(){},moveTo(){},lineTo(){},stroke(){}}};
+drawFrame(anchored);
+if(drawArgs[5]!==60||drawArgs[6]!==95)throw Error('All adopted actions must be drawn relative to the shared ground anchor');
+`,context);
