@@ -54,6 +54,45 @@ class Panel(AssetRepository):
                 if job and job['status'] in ('queued', 'running'):
                     job.update(status='interrupted', error='任务进程已结束且未写入完成记录，可重试当前步骤。', finished_at=now())
                     atomic(path, job)
+            for path in (self.root/'.local/terrain/jobs').glob('*/job.json'):
+                job = read(path)
+                if job and job['status'] in ('queued', 'running'):
+                    job.update(status='failed', stage='任务进程已结束，可继续任务',
+                               error='任务中断；继续时复用已保存的远程图片任务和材质。')
+                    atomic(path, job)
+        finally:
+            os.close(fd)
+
+    def start_terrain(self, data):
+        from terrain import prepare
+        fd = self.worker_lock()
+        if fd is None:
+            raise TaskBusyError('已有生产任务运行，请完成后再生成套件')
+        try:
+            if data.get('resume'):
+                identity = name(data['resume'])
+                path = self.scoped('.local/terrain/jobs/'+identity+'/job.json', '.local/terrain')
+                job = read(path)
+                if not job or job['status'] != 'failed':
+                    raise ValueError('仅能继续已中断或失败的任务')
+                job.update(status='queued', error=None, stage='等待继续任务')
+                atomic(path, job)
+            else:
+                job = prepare(self.root, data)
+                identity = job['id']
+                path = self.scoped('.local/terrain/jobs/'+identity+'/job.json', '.local/terrain')
+            try:
+                with (path.parent/'worker.log').open('ab') as log:
+                    child = subprocess.Popen(
+                        [str(self.root/'.local/python/bin/python3'), str(self.root/'pipeline/terrain_worker.py'),
+                         identity, str(fd)], cwd=self.root, stdout=log, stderr=subprocess.STDOUT,
+                        env={**os.environ, 'PYTHONUNBUFFERED':'1'}, pass_fds=(fd,), start_new_session=True)
+                    self.children.append(child)
+            except OSError:
+                job.update(status='failed', error='无法启动素材生成进程', stage='启动失败')
+                atomic(path, job)
+                raise
+            return job
         finally:
             os.close(fd)
 
@@ -425,9 +464,41 @@ def handler(panel):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             try:
-                if parsed.path in ('/','/app.js','/sequence.js','/workspace.js','/style.css'):
+                if parsed.path in ('/','/app.js','/sequence.js','/workspace.js','/style.css',
+                                   '/terrain.html','/terrain.js','/terrain.css',
+                                   '/transition.html','/transition.js'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
+                if parsed.path == '/api/terrain/state':
+                    from terrain import catalog
+                    from terrain_images import configured, load_config, DEFAULT_BASE
+                    with panel.mutex:
+                        panel.recover_jobs()
+                        result = catalog(panel.root)
+                        from terrain_transition import catalog as transition_catalog
+                        result['transitions']=transition_catalog(panel.root)
+                    result.update(token=panel.token, image_api_configured=configured(panel.root),
+                                  image_base_url=load_config(panel.root).get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE))
+                    return self.respond(result)
+                if parsed.path.startswith('/terrain-asset/'):
+                    relative = unquote(parsed.path[len('/terrain-asset/'):])
+                    parts = relative.split('/')
+                    if len(parts) != 2 or parts[1] not in ('atlas.png','ground_material.png','road_material.png','preview.png','kit.zip'):
+                        raise ValueError('无效套件资源')
+                    path = panel.scoped('terrain-kits/'+name(parts[0])+'/'+parts[1], 'terrain-kits')
+                    if parts[1]=='kit.zip':
+                        from terrain_integrity import require
+                        require(panel.root,'terrain-kits',parts[0])
+                    return self.respond(path.read_bytes(), mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path.startswith('/transition-asset/'):
+                    parts=unquote(parsed.path[len('/transition-asset/'):]).split('/')
+                    if len(parts)!=2 or parts[1] not in ('preview.png','atlas.png','kit.zip'):
+                        raise ValueError('无效过渡套件资源')
+                    path=panel.scoped('terrain-transitions/'+name(parts[0])+'/'+parts[1], 'terrain-transitions')
+                    if parts[1]=='kit.zip':
+                        from terrain_integrity import require
+                        require(panel.root,'terrain-transitions',parts[0])
+                    return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
                 if parsed.path == '/api/state':
                     with panel.mutex:
                         panel.recover_jobs()
@@ -482,7 +553,8 @@ def handler(panel):
                 return self.respond({'error':'请求校验失败，请刷新页面'},code=403)
             try:
                 size = int(self.headers.get('Content-Length','0'))
-                if not 0 < size <= (140*1024*1024 if urlparse(self.path).path=='/api/model/upload' else 18*1024*1024):
+                limit = 140*1024*1024 if urlparse(self.path).path=='/api/model/upload' else (34*1024*1024 if urlparse(self.path).path=='/api/terrain/generate' else 18*1024*1024)
+                if not 0 < size <= limit:
                     raise ValueError('请求为空或超过上传限制')
                 if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
                     raise ValueError('需要 JSON 请求')
@@ -491,7 +563,14 @@ def handler(panel):
                     raise ValueError('无效的请求结构')
                 with panel.mutex:
                     route = urlparse(self.path).path
-                    if route == '/api/model/upload':
+                    if route == '/api/terrain/transition':
+                        from terrain_transition import build
+                        folder=build(panel.root,data.get('base_kit'),data.get('overlay_kit'),
+                                     data.get('tile_size',64),data.get('title'),interactive=False)
+                        result=read(folder/'manifest.json')
+                    elif route == '/api/terrain/generate':
+                        result = panel.start_terrain(data)
+                    elif route == '/api/model/upload':
                         result=panel.upload_model(data)
                     elif route == '/api/upload':
                         result = panel.upload(data)
