@@ -36,3 +36,18 @@ def finish_batch(sheets,colors=64,frame_size=128,layouts=None):
             output.paste(Image.fromarray(result,'RGBA'),((i%spec['columns'])*frame_size,(i//spec['columns'])*frame_size))
         output.save(path)
     return {'palette_colors':colors,'outline_pixels':1,'dither':False,'palette_scope':'whole_batch','alpha_threshold':128,'frame_size':frame_size,'coverage_filter':'premultiplied_rgba_box','outline_stage':'after_resize'}
+
+
+def finish_texture_batch(sheets,frame_size,layouts):
+    """Preserve sampled albedo detail; do not impose a palette or synthetic outline."""
+    for path in sheets:
+        with Image.open(path) as source: image=source.convert('RGBA')
+        meta=layouts[path.name]
+        size=meta['frame_width'];count=meta['frame_count']
+        if frame_size>size: raise ValueError('禁止放大源图冒充分辨率提升')
+        spec=layout(image,size,count)
+        output=Image.new('RGBA',(spec['columns']*frame_size,spec['rows']*frame_size))
+        for i,tile in enumerate(tiles(image,size,count)):
+            output.paste(tile.resize((frame_size,frame_size),Image.Resampling.LANCZOS),((i%spec['columns'])*frame_size,(i//spec['columns'])*frame_size))
+        output.save(path)
+    return {'frame_size':frame_size,'coverage_filter':'premultiplied_rgba_lanczos','outline_pixels':0,'palette_colors':None,'style':'texture_detail'}

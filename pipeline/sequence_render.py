@@ -12,6 +12,9 @@ def settings(value):
     if result['equipment_id'] is not None:
         from panel import name
         result['equipment_id']=name(result['equipment_id'])
+    if value.get('body_height') is not None:
+        if type(value['body_height']) is not int or value['body_height'] not in (48,64,96,128): raise ValueError('无效的人物像素高度')
+        result['body_height'] = value['body_height']
     return result
 
 
@@ -74,7 +77,7 @@ def render(root,character,plan):
     atomic(directory/'batch.json',{'character':character,'batch':batch,'kind':'sequence','rig_sha256':plan['rig_sha256'],'files':files})
     r=plan['recipe']
     studio.progress_update(character,'render','正在将编排全部动作合并测量，统一相机、尺寸和坐标基准')
-    destination=studio.bake(character,batch,r['view'],r['frame_size'],r['supersample'],r['equipment_id'],r['renderer'],plan['equipment_usage_sha256'])
+    destination=studio.bake(character,batch,r['view'],r['frame_size'],r['supersample'],r['equipment_id'],r['renderer'],plan['equipment_usage_sha256'], **({'body_height':r['body_height']} if r.get('body_height') else {}))
     # Assert the renderer actually used one projection, not just equal PNG dimensions.
     manifest=json.loads((destination/'manifest.json').read_text())
     cameras=[manifest[Path(f).stem+'_spritesheet.png'].get('camera') for f in files]

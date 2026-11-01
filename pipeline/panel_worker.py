@@ -119,7 +119,7 @@ def execute(job, persist):
         outputs['sequence_preview']=render(studio.BASE_DIR,character,params['plan'])
     elif action == 'bake':
         # studio.bake publishes and records its destination only after the full batch passes.
-        studio.bake(character, params['batch'], params['view'], params['frame_size'], params['supersample'], params.get('equipment_id'), params.get('renderer','godot'), params.get('equipment_usage_sha256'), selected_files=params.get('files'))
+        studio.bake(character, params['batch'], params['view'], params['frame_size'], params['supersample'], params.get('equipment_id'), params.get('renderer','godot'), params.get('equipment_usage_sha256'), selected_files=params.get('files'), body_height=params.get('body_height'))
         from progress import read
         outputs['delivery'] = read(character)['output']
     else:

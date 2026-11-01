@@ -252,11 +252,14 @@ def make_game_version(sheet, timing, quality, equipment_usage=None):
 
 
 @track_failures
-def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None, renderer="godot", equipment_usage_sha256=None, selected_files=None):
+def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None, renderer="godot", equipment_usage_sha256=None, selected_files=None, body_height=None):
     if renderer not in ('godot','blender'):
         raise ValueError('未知渲染后端')
     if frame_size not in (64, 128) or supersample not in (1, 2, 4):
         raise ValueError('Unsupported frame size or supersampling factor')
+    if body_height is not None:
+        from sprite_projection import BODY_HEIGHTS
+        if type(body_height) is not int or body_height not in BODY_HEIGHTS: raise ValueError('无效的人物像素高度')
     render_size = frame_size * supersample
     progress_update(character, 'validate', '正在检查源动作的贴图和动态轨道', batch=batch)
     source = workspace(character) / 'animations' / slug(batch)
@@ -307,6 +310,9 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         stage_model(equipment_config,BASE_DIR/'workspaces'/character/'equipment'/equipment_id/'weapon.glb',project)
         (project / 'equipment.json').write_text(json.dumps(equipment_config, indent=2))
         (project / 'equipment_usage.json').write_text(json.dumps(equipment_usage,indent=2))
+    if body_height is not None:
+        from sprite_projection import stage_reference
+        reference_sha = stage_reference(BASE_DIR, character, data, project, digest)
     inputs = project / 'animations'
     inputs.mkdir()
     for name in files:
@@ -326,6 +332,18 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
     from motion_heading import stage as stage_heading
     stage_heading(BASE_DIR, character, project, files, 'res://animations', GODOT, job)
+    projection = None
+    if body_height is not None:
+        progress_update(character, 'render', '正在以标准站姿测量人物像素密度与完整动作画布', job=str(job), batch=batch)
+        with (job/'measure.log').open('w') as log:
+            subprocess.run([GODOT,'--path',str(project),'--rendering-method','gl_compatibility',
+                '--log-file',str(job/'measure-engine.log'),'--','--output',str(staging),
+                '--view',view,'--frame-size','64','--measure-only'],stdout=log,stderr=subprocess.STDOUT,check=True,timeout=1200)
+        from sprite_projection import plan
+        projection = plan(json.loads((staging/'measurement.json').read_text()),body_height,supersample,reference_sha)
+        (project/'projection.json').write_text(json.dumps(projection,indent=2))
+        (staging/'projection.json').write_text(json.dumps(projection,indent=2))
+        frame_size, render_size = projection['frame_size'], projection['render_size']
     if renderer == 'godot':
         progress_update(character, 'render', '正在测量动作范围并渲染图集', job=str(job), batch=batch)
         with (job / 'bake.log').open('w') as log:
@@ -364,7 +382,12 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
     if not sheet_paths:
         (job/'quality.json').write_text(json.dumps({'schema':1,'summary':{'passed':0,'review':0,'failed':len(results)},'results':results},ensure_ascii=False,indent=2))
         raise ValueError('全部动作质量检查失败：'+'；'.join(r['reason'] for r in results))
-    pixel_settings=finish_batch(sheet_paths,frame_size=frame_size,layouts=timings)
+    if projection:
+        from pixel_finish import finish_texture_batch
+        pixel_settings=finish_texture_batch(sheet_paths,frame_size=frame_size,layouts=timings)
+        pixel_settings.update(body_height_px=body_height,projection=projection)
+    else:
+        pixel_settings=finish_batch(sheet_paths,frame_size=frame_size,layouts=timings)
     pixel_settings.update(render_size=render_size,supersample=supersample)
     metadata={'renderer':renderer,'pixel_style':pixel_settings}
     for sheet in sheet_paths:
@@ -372,6 +395,8 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         try:
             timing=timings[sheet.name].copy()
             info=validate_sheet(sheet,frame_size,timing['frame_count'],allow_small=True)
+            if projection:
+                timing.update(projection=projection, body_height_px=body_height, anchor_px=projection['anchor_px'])
             timing.update(frame_width=frame_size,frame_height=frame_size,render_width=render_size,columns=info['columns'],rows=info['rows'])
             (staging/f'{Path(name).stem}_render.json').write_text(json.dumps(timing,indent=2)+'\n')
             compact_info=make_game_version(sheet,timing,info['quality'],equipment_usage)
@@ -471,6 +496,7 @@ def main():
             p.add_argument('--renderer', choices=['godot','blender'], default='godot')
             p.add_argument('--equipment', help='已确认的装备配置编号')
             p.add_argument('--frame-size', type=int, choices=[64, 128], default=128)
+            p.add_argument('--body-height', type=int, choices=[48,64,96,128], default=None)
             p.add_argument('--supersample', type=int, choices=[1, 2, 4], default=1)
         if command == 'build':
             p.add_argument('--actions', default='Idle,Running')
@@ -507,7 +533,7 @@ def main():
             from review_character import review
             review(args.character, args.batch, args.capture_only)
         elif args.command == 'bake':
-            bake(args.character, args.batch, args.view, args.frame_size, args.supersample, args.equipment, args.renderer)
+            bake(args.character, args.batch, args.view, args.frame_size, args.supersample, args.equipment, args.renderer, body_height=args.body_height)
         elif args.command == 'build':
             names = [v.strip() for v in args.actions.split(',') if v.strip()]
             if not names or len({slug(v.lower().replace(' ', '_')) for v in names}) != len(names):

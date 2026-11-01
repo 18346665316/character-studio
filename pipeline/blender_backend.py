@@ -20,6 +20,7 @@ def render(root, project, staging, job, view, render_size, godot):
         subprocess.run([godot,'--headless','--path',str(project),'--script','blender_export.gd',
                         '--log-file',str(job/'blender-export-engine.log'),'--','--output',str(bridge)],
                        stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)
+    if (project/'projection.json').is_file(): shutil.copy2(project/'projection.json',bridge/'projection.json')
     with (job/'blender-render.log').open('w') as log:
         subprocess.run([blender,'--background','--factory-startup','--python-exit-code','1',
                         '--python',str(root/'pipeline/blender/render.py'),'--','--input',str(bridge),

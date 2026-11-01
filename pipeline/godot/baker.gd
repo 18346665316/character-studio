@@ -6,6 +6,8 @@ var frame_count := 10
 var view := "three_quarter"
 var sampling := {}
 var preflight := true
+var projection := {}
+var measure_only := false
 var shared_bounds := AABB()
 var has_shared_bounds := false
 var shared_screen := Rect2()
@@ -13,6 +15,10 @@ var has_shared_screen := false
 
 func _ready() -> void:
     var args := OS.get_cmdline_user_args()
+    measure_only = "--measure-only" in args
+    if FileAccess.file_exists("res://projection.json"):
+        projection = JSON.parse_string(FileAccess.get_file_as_string("res://projection.json"))
+        frame_size = int(projection.render_size)
     var output := ""
     for i in range(args.size() - 1):
         if args[i] == "--output":
@@ -38,6 +44,24 @@ func _ready() -> void:
             if not await bake_animation("res://animations/" + file_name, output, file_name.get_basename()):
                 get_tree().quit(1)
                 return
+    if measure_only:
+        var reference := (load("res://reference.fbx") as PackedScene).instantiate()
+        add_child(reference)
+        var boxes := AABB()
+        var found := false
+        for mesh in reference.find_children("*", "MeshInstance3D", true, false):
+            var box: AABB = mesh.global_transform * mesh.get_aabb()
+            boxes = boxes.merge(box) if found else box
+            found = true
+        var file := FileAccess.open(output.path_join("measurement.json"),FileAccess.WRITE)
+        file.store_string(JSON.stringify({"view":view,"reference_height":boxes.size.y,
+            "reference_origin":[boxes.get_center().x,boxes.position.y,boxes.get_center().z],
+            "screen_min":[shared_screen.position.x,shared_screen.position.y],
+            "screen_max":[shared_screen.end.x,shared_screen.end.y]}))
+        file.close()
+        reference.free()
+        get_tree().quit(0 if found else 1)
+        return
     preflight = false
     var count := 0
     for file_name in files:
@@ -197,6 +221,10 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
     center += screen_right * (screen_center.x - center.dot(screen_right))
     center.y = screen_center.y
     camera.size = maxf(maxf(shared_screen.size.x, shared_screen.size.y) * 1.12, 0.0001)
+    if not projection.is_empty():
+        camera.size = float(projection.camera_size)
+        var c: Array = projection.camera_center
+        center = Vector3(c[0],c[1],c[2])
     camera.position = center + Vector3(sin(angle), 0, cos(angle)) * maxf(extent * 3.0, 0.001)
     camera.near = maxf(extent * 0.001, 0.000001)
     camera.far = maxf(extent * 10.0, 0.01)
@@ -226,6 +254,10 @@ func bake_animation(path: String, output: String, asset_name: String) -> bool:
         "fps": float(frame_count) / length, "clip": selected, "view": view,
         "camera": {"size": camera.size, "center": [center.x,center.y,center.z], "view": view},
         "heading": heading, "render_style": "unshaded_texture", "framing": "shared_batch_projected_bounds", "frame_width": frame_size, "frame_height": frame_size}, true)
+    if not projection.is_empty():
+        timing["projection"] = projection
+        timing["body_height_px"] = projection.body_height_px
+        timing["anchor_px"] = projection.anchor_px
     metadata.store_string(JSON.stringify(timing, "  "))
     metadata.close()
     if error != OK:

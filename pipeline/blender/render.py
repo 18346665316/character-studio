@@ -121,6 +121,12 @@ def main():
     print('PROJECTED_BOUNDS', limits, 'CAMERA_SIZE', size, flush=True)
     extent = max(size,limits[5]-limits[2],1e-4)
     center = right*((limits[0]+limits[3])/2)+Vector((0,0,(limits[1]+limits[4])/2))+forward*((limits[2]+limits[5])/2)
+    projection = json.loads((source/'projection.json').read_text()) if (source/'projection.json').is_file() else None
+    if projection:
+        size = float(projection['camera_size'])
+        c = projection['camera_center']
+        center = Vector((c[0],-c[2],c[1]))
+        extent = max(extent,size)
     output.mkdir(parents=True,exist_ok=True)
     for clip in clips:
         objects = load_clip(source/(clip['name']+'.glb'))
@@ -147,6 +153,7 @@ def main():
                   'camera':{'size':size,'center':list(center),'view':args.view},
                   'blender_version':bpy.app.version_string,'render_style':'eevee_soft_unshadowed','framing':'shared_batch_projected_vertices',
                   'frame_width':args.frame_size,'frame_height':args.frame_size}
+        if projection: metadata.update(projection=projection,body_height_px=projection['body_height_px'],anchor_px=projection['anchor_px'])
         (output/(clip['name']+'_render.json')).write_text(json.dumps(metadata,indent=2))
     print('BLENDER_RENDER_COMPLETE',flush=True)
 

@@ -20,3 +20,30 @@ class MixamoAuthTests(unittest.TestCase):
         text=c.safe_error(Exception('navigation https://www.mixamo.com/ims/logout?token=secret and https://adobe.com/?access_token=secret'))
         self.assertNotIn('secret',text);self.assertNotIn('access_token',text)
         self.assertIn('重新打开',c.safe_error(Exception('Target page, context or browser has been closed')))
+
+class SharedSSOTests(unittest.TestCase):
+    def test_shared_login_excludes_character_storage_and_other_domains(self):
+        import tempfile,json
+        with tempfile.TemporaryDirectory() as folder, patch.object(c,'SESSION_FILE',Path(folder)/'session.json'):
+            context=MagicMock()
+            context.storage_state.return_value={'origins':[{'origin':'https://www.mixamo.com','localStorage':[{'name':'access_token','value':'test-token'},{'name':'SettingsStore','value':'character-data'}]}]}
+            context.cookies.return_value=[{'domain':'.adobelogin.com','name':'sso','value':'test','expires':-1},
+                {'domain':'.mixamo.com','name':'character','value':'hero','expires':-1},
+                {'domain':'eviladobe.com','name':'fake','value':'no','expires':-1}]
+            c.save_shared_login(context)
+            saved=json.loads(c.SESSION_FILE.read_text())
+            self.assertEqual([v['name'] for v in saved['cookies']],['sso'])
+            self.assertEqual([v['name'] for v in saved['origins'][0]['localStorage']],['access_token'])
+            page=MagicMock();page.url='https://www.mixamo.com/'
+            self.assertTrue(c.restore_shared_login(context,page))
+            page.evaluate.assert_called_once()
+            self.assertTrue(c.restore_shared_login(context))
+            self.assertEqual(context.add_cookies.call_args.args[0],saved['cookies'])
+
+    def test_expired_sso_is_not_restored(self):
+        import tempfile,json
+        with tempfile.TemporaryDirectory() as folder, patch.object(c,'SESSION_FILE',Path(folder)/'session.json'):
+            c.SESSION_FILE.write_text(json.dumps({'cookies':[{'domain':'.adobe.com','expires':1}]}))
+            context=MagicMock()
+            self.assertFalse(c.restore_shared_login(context))
+            context.add_cookies.assert_not_called()

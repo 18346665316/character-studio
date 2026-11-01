@@ -3,10 +3,11 @@
 function sequenceOptions(c){return c.deliveries.filter(d=>d.kind!=='sequence').flatMap(d=>d.clips.filter(i=>i.sheet).map(item=>({id:d.id+'/'+item.name,delivery:d,item,title:animationTitle(c.batches.find(b=>b.id===d.batch)||{},item.name+'.fbx')})));}
 function sequenceDraft(c){const p=prefs();if(!p.sequenceDraft)p.sequenceDraft=JSON.parse(JSON.stringify(c.sequence||{title:'动作编排',loop:true,segments:[]}));return p.sequenceDraft;}
 function sequenceSettings(draft,options){
- if(!draft.renderSettings){const first=options.find(o=>o.id===draft.segments[0]?.delivery+'/'+draft.segments[0]?.clip);draft.renderSettings={renderer:first?.delivery.renderer||'godot',view:first?.item.info.view||'three_quarter',frame_size:128,supersample:4,equipment_id:first?.delivery.equipment?.id||null};}
+ if(!draft.renderSettings){const first=options.find(o=>o.id===draft.segments[0]?.delivery+'/'+draft.segments[0]?.clip);draft.renderSettings={renderer:first?.delivery.renderer||'godot',view:first?.item.info.view||'three_quarter',frame_size:128,body_height:96,supersample:4,equipment_id:first?.delivery.equipment?.id||null};}
+ if(!draft.renderSettings.body_height)draft.renderSettings.body_height=96;
  return draft.renderSettings;
 }
-function sequenceRecipe(draft){const s=draft.renderSettings;return {sources:[...new Set(draft.segments.map(s=>s.delivery+'/'+s.clip))].sort(),renderer:s.renderer,view:s.view,frame_size:s.frame_size,supersample:s.supersample,equipment_id:s.equipment_id||null};}
+function sequenceRecipe(draft){const s=draft.renderSettings;return {sources:[...new Set(draft.segments.map(s=>s.delivery+'/'+s.clip))].sort(),renderer:s.renderer,view:s.view,frame_size:s.frame_size,supersample:s.supersample,equipment_id:s.equipment_id||null,...(s.body_height?{body_height:s.body_height}:{})};}
 function sequencePreviewOptions(c,draft,options){
  const preview=c.sequence_preview;if(!preview||preview.heading_stale||JSON.stringify(preview.recipe)!==JSON.stringify(sequenceRecipe(draft)))return null;
  const delivery=c.deliveries.find(d=>d.id===preview.delivery);if(!delivery)return null;
@@ -53,7 +54,7 @@ function renderSequence(c){
  controls.append(field('添加原动作来源',choice),button('＋ 添加片段',()=>{const o=options.find(v=>v.id===choice.value);if(o){draft.segments.push({delivery:o.delivery.id,clip:o.item.name,repeat:1,speed:1});changed();}},'full',!options.length||draft.segments.length>=64));
  controls.append(button('保存编排',()=>mutation('/api/sequence',{character:selected,...draft},'动作编排已保存到当前人物。'),'primary full',blocked()||state.api_version<10),note(JSON.stringify(draft)===JSON.stringify(c.sequence)?'编排已保存。':'当前编排有未保存的修改。'));
  const rendering=node('div',undefined,'sequence-rendering');rendering.append(node('h3','统一取景'));
- rendering.append(field('编排渲染器',select([['godot','Godot'],['blender','Blender · Eevee']],renderSettings.renderer,v=>{renderSettings.renderer=v;changed();})),field('编排视角',select([['front','正面'],['side','侧面'],['three_quarter','四分之三']],renderSettings.view,v=>{renderSettings.view=v;changed();})),field('编排帧尺寸',select([[64,'64 × 64'],[128,'128 × 128']],renderSettings.frame_size,v=>{renderSettings.frame_size=Number(v);changed();})),field('编排装备',select([['','空手'],...c.equipment.map(e=>[e.id,e.weapon_name||'标准单手剑'])],renderSettings.equipment_id||'',v=>{renderSettings.equipment_id=v||null;changed();})),note('整段动作共用同一相机、画布、装备和调色板。更改顺序、速度与重复次数无需重新渲染。'));
+ rendering.append(field('编排渲染器',select([['godot','Godot'],['blender','Blender · Eevee']],renderSettings.renderer,v=>{renderSettings.renderer=v;changed();})),field('编排视角',select([['front','正面'],['side','侧面'],['three_quarter','四分之三']],renderSettings.view,v=>{renderSettings.view=v;changed();})),field('编排人物高度',select([[48,'48px'],[64,'64px'],[96,'96px（推荐）'],[128,'128px']],renderSettings.body_height||96,v=>{renderSettings.body_height=Number(v);changed();})),field('编排装备',select([['','空手'],...c.equipment.map(e=>[e.id,e.weapon_name||'标准单手剑'])],renderSettings.equipment_id||'',v=>{renderSettings.equipment_id=v||null;changed();})),note('整段动作共用同一人物像素密度、相机、画布、脚底锚点和装备。更改顺序、速度与重复次数无需重新渲染。'));
  const previewOptions=sequencePreviewOptions(c,draft,options);
  rendering.append(button(previewOptions?'重新生成统一预览':'生成统一预览',()=>start('sequence',{recipe:sequenceRecipe(draft)}),'primary full',blocked()||!draft.segments.length||state.api_version<10));controls.append(rendering);
  const list=node('ol',undefined,'sequence-list');list.setAttribute('aria-label','动作编排片段');

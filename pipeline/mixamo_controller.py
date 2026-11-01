@@ -18,6 +18,7 @@ from mixamo_state import (character_name, check_mesh_identity, check_motion, fil
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_FILE = BASE_DIR / '.local/auth/mixamo_session.json'
+MIXAMO_URL = 'https://www.mixamo.com/#/?page=1&type=Motion%2CMotionPack'
 
 
 @contextmanager
@@ -79,6 +80,48 @@ def open_profile(playwright, character, visible):
     return context, page
 
 
+def save_shared_login(context):
+    """Share login credentials only; never copy character/settings storage."""
+    import tempfile
+    cookies = [c for c in context.cookies() if adobe_cookie(c)]
+    origins=[]
+    for origin in context.storage_state().get('origins',[]):
+        if origin.get('origin') != 'https://www.mixamo.com': continue
+        auth=[v for v in origin.get('localStorage',[]) if v.get('name') in ('access_token','guid')]
+        if auth: origins.append({'origin':origin['origin'],'localStorage':auth})
+    if not cookies and not origins: return
+    SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=SESSION_FILE.parent, prefix='.sso-', suffix='.json')
+    with os.fdopen(fd, 'w') as stream:
+        json.dump({'cookies':cookies,'origins':origins}, stream)
+    os.replace(temporary, SESSION_FILE)
+    SESSION_FILE.chmod(0o600)
+
+
+def adobe_cookie(cookie):
+    domain = cookie.get('domain','').lstrip('.').lower()
+    return any(domain == suffix or domain.endswith('.'+suffix)
+               for suffix in ('adobe.com','adobelogin.com','adobe.io'))
+
+
+def restore_shared_login(context, page=None):
+    if not SESSION_FILE.is_file(): return False
+    saved = json.loads(SESSION_FILE.read_text())
+    cookies = [c for c in saved.get('cookies',[]) if adobe_cookie(c)
+               and (c.get('expires',-1) == -1 or c.get('expires',0) > time.time())]
+    if cookies: context.add_cookies(cookies)
+    restored=False
+    if page is not None:
+        from urllib.parse import urlparse
+        if urlparse(page.url).hostname == 'www.mixamo.com':
+            auth=[v for o in saved.get('origins',[]) if o.get('origin')=='https://www.mixamo.com'
+                  for v in o.get('localStorage',[]) if v.get('name') in ('access_token','guid')]
+            if auth:
+                page.evaluate('(items) => { for(const item of items) localStorage.setItem(item.name,item.value); }',auth)
+                restored=True
+    return bool(cookies) or restored
+
+
 def safe_error(exc):
     text=str(exc)
     text=re.sub(r'https?://[^\s"<>]+',lambda m:m.group(0).split('?')[0].split('#')[0],text)
@@ -89,15 +132,23 @@ def safe_error(exc):
 
 
 def wait_for_login(context,page,character=None,timeout=360):
-    started=time.monotonic();logout_hits=[];reset=False;announced=False
+    started=time.monotonic();logout_hits=[];reset=False;announced=False;shared_tried=False
     upload=page.get_by_role('button',name='Upload Character',exact=False)
     while time.monotonic()-started<timeout:
         if page.is_closed():raise ValueError('Mixamo 浏览器已关闭，尚未完成登录。请重新打开绑定窗口。')
         try:
             if upload.is_visible():
+                save_shared_login(context)
                 if character:progress_update(character,'rig','登录已恢复，继续上传人物')
                 return upload
             url=page.url
+            if not shared_tried and time.monotonic()-started >= 8:
+                shared_tried=True
+                if restore_shared_login(context,page):
+                    print('正在复用本机已登录 Adobe 会话；人物浏览器与绑定仍保持独立。',flush=True)
+                    page.goto(MIXAMO_URL,wait_until='domcontentloaded')
+                    logout_hits=[]
+                    continue
             if '/logout' in url:
                 logout_hits.append(time.monotonic())
                 logout_hits=[t for t in logout_hits if time.monotonic()-t<20]
@@ -108,7 +159,7 @@ def wait_for_login(context,page,character=None,timeout=360):
                     page.evaluate('() => { localStorage.clear(); sessionStorage.clear(); }')
                 # Clear stale Mixamo storage on the next document too, once only.
                 page.add_init_script("if(location.hostname==='www.mixamo.com'&&!sessionStorage.getItem('studioAuthReset')){localStorage.clear();sessionStorage.setItem('studioAuthReset','1');}")
-                page.goto('https://www.mixamo.com/#/',wait_until='domcontentloaded')
+                page.goto(MIXAMO_URL,wait_until='domcontentloaded')
             if not announced:
                 announced=True
                 print('等待 Adobe 登录；如会话失效，请在当前浏览器窗口重新登录。',flush=True)
@@ -126,7 +177,7 @@ def action_login():
         browser = p.chromium.launch(headless=False, **browser_options(p))
         context = browser.new_context()
         page = context.new_page()
-        page.goto('https://www.mixamo.com/#/', wait_until='domcontentloaded')
+        page.goto(MIXAMO_URL, wait_until='domcontentloaded')
         print('请在浏览器中登录 Adobe；登录完成后保存本地会话。', flush=True)
         wait_for_login(context,page)
         SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +270,7 @@ def action_upload(model, character):
             context, page = open_profile(p, character, visible=True)
             approved = {'value': False}
             page.expose_function('studioApproveRig', lambda: approved.update(value=True))
-            page.goto('https://www.mixamo.com/#/', wait_until='domcontentloaded')
+            page.goto(MIXAMO_URL, wait_until='domcontentloaded')
             print('请在可见 Mixamo 窗口确认朝向、放置关节点、完成绑定，并检查角色与变形。', flush=True)
             print('完成网页向导后，点击左下角 Studio 的确认按钮；关闭窗口将取消本次绑定。', flush=True)
             upload = wait_for_login(context,page,character)
@@ -370,7 +421,7 @@ def action_download(anim_name, output_fbx, character):
         marker=output.parent/'.mixamo-recovery.json'
         recovery_started=False
         try:
-            page.goto('https://www.mixamo.com/#/?page=1&type=Motion%2CMotionPack', wait_until='domcontentloaded')
+            page.goto(MIXAMO_URL, wait_until='domcontentloaded')
             for attempt in range(2):
                 progress_update(character,'download',f'{anim_name}：正在下载并检查人物、贴图、骨骼和动态轨道',action=anim_name)
                 info=request_animation(page,anim_name,pending)
@@ -398,6 +449,7 @@ def action_download(anim_name, output_fbx, character):
                 fields={k:v for k,v in state.items() if k not in ('character','status','error','cloud_recovery')}
                 write_state(character,'ready',**fields)
                 progress_update(character,'download',f'{anim_name}：人物身份、贴图、骨骼与动态轨道校验通过',action=anim_name)
+                save_shared_login(context)
                 print(f'角色网格和动态轨道检查通过: {output}',flush=True)
                 return
         except Exception as exc:

@@ -443,6 +443,10 @@ class Panel:
                 if clean['renderer'] not in ('godot','blender'):
                     raise ValueError('未知渲染后端')
                 clean['view'] = params.get('view', 'three_quarter')
+                body_height = params.get('body_height', None if 'frame_size' in params else 96)
+                if body_height is not None:
+                    if type(body_height) is not int or body_height not in (48,64,96,128): raise ValueError('无效的人物像素高度')
+                    clean['body_height'] = body_height
                 clean['frame_size'] = params.get('frame_size', 64)
                 clean['supersample'] = params.get('supersample', 4)
                 if clean['view'] not in ('front','side','three_quarter') or clean['frame_size'] not in (64,128) or clean['supersample'] not in (1,2,4):
@@ -613,7 +617,7 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
-                        result = {'api_version':17,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':18,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
