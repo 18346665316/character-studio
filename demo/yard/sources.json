@@ -1,0 +1,49 @@
+{
+  "terrain": {
+    "source": "terrain-kits/20261101-192420-43363e76",
+    "zip_sha256": "c0dcf7497cc305afce831c1503704f73bfce26524d74f8c53dcc5331cc67cd89"
+  },
+  "water": {
+    "source": "terrain-transitions/20261101-211802-903d2ca6",
+    "zip_sha256": "7ba76a6330a1cff1ae03a4ffcb741619e96ed156a4de6636ee13637a83d79926"
+  },
+  "fence": {
+    "source": "component-kits/20261101-214941-4eab1d46",
+    "zip_sha256": "1008f6ceb457d23519e99f04f973a4a636a2c263c939068fd21c63e8fee179ad"
+  },
+  "rock": {
+    "source": "prop-kits/20261101-220035-4ba65e34",
+    "zip_sha256": "3c539080b403d7e473988e736bc1273502bdaf4b30d353400c0f4a3b8567385d"
+  },
+  "crate": {
+    "source": "prop-kits/20261101-221510-229aa2a0",
+    "zip_sha256": "7041e24119dc34a37e68453151f3f6b5f5ff4d7d41e1840f13acbf3b5163266e"
+  },
+  "bush": {
+    "source": "prop-kits/20261101-221737-b973aa63",
+    "zip_sha256": "ffeb52057158517ec790a15bff4283777805483a8a655ac114311b997023747d"
+  },
+  "character": {
+    "character": "hunyuan-guard",
+    "delivery": "20261101-160235-ed6aa702",
+    "selection": {
+      "idle": {
+        "delivery": "20261101-160235-ed6aa702",
+        "clip": "breathing_idle"
+      },
+      "walk": {
+        "delivery": "20261101-160235-ed6aa702",
+        "clip": "walking"
+      },
+      "run": {
+        "delivery": "20261101-160235-ed6aa702",
+        "clip": "running"
+      },
+      "jump": {
+        "delivery": "20261101-160235-ed6aa702",
+        "clip": "standing_jump"
+      }
+    },
+    "export_sha256": "26d99c88ef82cbf47cbabebf81bd56fd7b0725f34096a89fca0f7cea996ff1bd"
+  }
+}

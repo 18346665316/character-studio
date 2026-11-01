@@ -5,3 +5,4 @@
 .surface-preview{display:block;width:100%;height:auto;image-rendering:pixelated;border-radius:6px}#transition-history{max-width:260px}#transition-gallery{margin-top:18px}
 
 .terrain-request-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px;background:#f5f6f3;padding:10px}
+.prop-result-heading{flex-wrap:wrap}.prop-result-heading h2{flex:1 1 160px}.prop-result-heading select{max-width:100%}.prop-result-heading #prop-filter{flex:0 1 140px}.prop-result-heading #prop-history{flex:1 1 240px;min-width:0}

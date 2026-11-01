@@ -200,6 +200,8 @@ def generate_materials(folder, spec, progress):
     prompt_set = prompts(spec['description'])
     if spec.get('asset_type')=='material':
         prompt_set['ground']=prompt_set['ground'].replace(' (grass by default)','')
+        if spec.get('material_prompt'):
+            prompt_set['ground'] = spec['material_prompt']
     for role in (('ground',) if spec.get('asset_type')=='material' else ('ground','road')):
         target = folder/'inputs'/f'{role}.png'
         record = receipt.setdefault(role, {'prompt': prompt_set[role], 'model': 'gpt-image-2',

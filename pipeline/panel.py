@@ -54,7 +54,8 @@ class Panel(AssetRepository):
                 if job and job['status'] in ('queued', 'running'):
                     job.update(status='interrupted', error='任务进程已结束且未写入完成记录，可重试当前步骤。', finished_at=now())
                     atomic(path, job)
-            for path in (self.root/'.local/terrain/jobs').glob('*/job.json'):
+            for path in [p for family in ('terrain','components','props')
+                         for p in (self.root/('.local/'+family+'/jobs')).glob('*/job.json')]:
                 job = read(path)
                 if job and job['status'] in ('queued', 'running'):
                     job.update(status='failed', stage='任务进程已结束，可继续任务',
@@ -63,15 +64,22 @@ class Panel(AssetRepository):
         finally:
             os.close(fd)
 
-    def start_terrain(self, data):
-        from terrain import prepare
+    def start_terrain(self, data, components=False, props=False):
+        if props:
+            from static_props import prepare
+        elif components:
+            from component_jobs import prepare
+        else:
+            from terrain import prepare
+        storage='.local/'+('props' if props else 'components' if components else 'terrain')+'/jobs/'
+        worker='static_props.py' if props else 'component_jobs.py' if components else 'terrain_worker.py'
         fd = self.worker_lock()
         if fd is None:
             raise TaskBusyError('已有生产任务运行，请完成后再生成套件')
         try:
             if data.get('resume'):
                 identity = name(data['resume'])
-                path = self.scoped('.local/terrain/jobs/'+identity+'/job.json', '.local/terrain')
+                path = self.scoped(storage+identity+'/job.json', storage)
                 job = read(path)
                 if not job or job['status'] != 'failed':
                     raise ValueError('仅能继续已中断或失败的任务')
@@ -80,11 +88,11 @@ class Panel(AssetRepository):
             else:
                 job = prepare(self.root, data)
                 identity = job['id']
-                path = self.scoped('.local/terrain/jobs/'+identity+'/job.json', '.local/terrain')
+                path = self.scoped(storage+identity+'/job.json', storage)
             try:
                 with (path.parent/'worker.log').open('ab') as log:
                     child = subprocess.Popen(
-                        [str(self.root/'.local/python/bin/python3'), str(self.root/'pipeline/terrain_worker.py'),
+                        [str(self.root/'.local/python/bin/python3'), str(self.root/'pipeline'/worker),
                          identity, str(fd)], cwd=self.root, stdout=log, stderr=subprocess.STDOUT,
                         env={**os.environ, 'PYTHONUNBUFFERED':'1'}, pass_fds=(fd,), start_new_session=True)
                     self.children.append(child)
@@ -469,6 +477,46 @@ def handler(panel):
                                    '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
+                if parsed.path in ('/components.html','/components.js','/props.html','/props.js'):
+                    file=STATIC/parsed.path[1:]
+                    return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
+                if parsed.path == '/api/props/state':
+                    from static_props import catalog, KINDS
+                    from terrain_images import configured
+                    with panel.mutex:
+                        panel.recover_jobs()
+                        result=catalog(panel.root)
+                    result.update(token=panel.token,image_api_configured=configured(panel.root),kinds=KINDS)
+                    return self.respond(result)
+                if parsed.path.startswith('/prop-asset/'):
+                    from static_props import load_package
+                    parts=unquote(parsed.path[len('/prop-asset/'):]).split('/')
+                    if len(parts)!=2 or parts[1] not in ('sprite.png','preview.png','anchor_collision.png','cutout.png','kit.zip'):
+                        raise ValueError('无效物件资源')
+                    path=panel.scoped('prop-kits/'+name(parts[0])+'/'+parts[1],'prop-kits')
+                    if parts[1]=='kit.zip': load_package(panel.root,parts[0])
+                    return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path == '/api/props/job-image':
+                    job_id=name(query.get('id',[''])[0])
+                    path=panel.scoped('.local/props/jobs/'+job_id+'/inputs/original.png','.local/props/jobs/'+job_id)
+                    return self.respond(path.read_bytes(),'image/png')
+                if parsed.path == '/api/components/state':
+                    from fence_components import catalog
+                    from component_jobs import catalog as jobs
+                    from terrain_images import configured
+                    with panel.mutex:
+                        panel.recover_jobs()
+                        result={'kits':catalog(panel.root),'jobs':jobs(panel.root),'token':panel.token,
+                                'image_api_configured':configured(panel.root)}
+                    return self.respond(result)
+                if parsed.path.startswith('/component-asset/'):
+                    from fence_components import load_package
+                    parts=unquote(parsed.path[len('/component-asset/'):]).split('/')
+                    if len(parts)!=2 or parts[1] not in ('preview.png','atlas.png','assembly.png','assembly_collision.png','wood_material.png','kit.zip'):
+                        raise ValueError('无效构件资源')
+                    path=panel.scoped('component-kits/'+name(parts[0])+'/'+parts[1],'component-kits')
+                    if parts[1]=='kit.zip':load_package(panel.root,parts[0])
+                    return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
                 if parsed.path == '/api/terrain/state':
                     from terrain import catalog
                     from terrain_images import configured, load_config, DEFAULT_BASE
@@ -480,10 +528,12 @@ def handler(panel):
                     result.update(token=panel.token, image_api_configured=configured(panel.root),
                                   image_base_url=load_config(panel.root).get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE))
                     return self.respond(result)
-                if parsed.path == '/api/terrain/job-log':
+                if parsed.path in ('/api/terrain/job-log','/api/components/job-log','/api/props/job-log'):
                     from terrain_images import load_config
                     identity=name(query.get('id',[''])[0])
-                    path=panel.scoped('.local/terrain/jobs/'+identity+'/http.jsonl','.local/terrain/jobs/'+identity)
+                    family=parsed.path.split('/')[2]
+                    storage='.local/'+family+'/jobs/'
+                    path=panel.scoped(storage+identity+'/http.jsonl',storage+identity)
                     if not (path.parent/'job.json').is_file(): raise ValueError('任务不存在')
                     events=[]
                     config=load_config(panel.root)
@@ -585,7 +635,22 @@ def handler(panel):
                     raise ValueError('无效的请求结构')
                 with panel.mutex:
                     route = urlparse(self.path).path
-                    if route == '/api/terrain/transition':
+                    if route == '/api/props/generate':
+                        result=panel.start_terrain(data,props=True)
+                    elif route == '/api/props/remake':
+                        from static_props import remake
+                        result=read(remake(panel.root,data)/'manifest.json')
+                    elif route == '/api/components/generate':
+                        result=panel.start_terrain(data,components=True)
+                    elif route == '/api/components/build':
+                        from fence_components import build
+                        from terrain import decode_image
+                        mode=data.get('mode')
+                        if mode not in ('import','demo'): raise ValueError('请选择导入木纹或程序示例')
+                        image=decode_image(data.get('wood')) if mode=='import' else None
+                        folder=build(panel.root,appearance='timber',wood_image=image)
+                        result=read(folder/'manifest.json')
+                    elif route == '/api/terrain/transition':
                         from terrain_transition import build
                         folder=build(panel.root,data.get('base_kit'),data.get('overlay_kit'),
                                      data.get('tile_size',64),data.get('title'),interactive=False,

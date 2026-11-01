@@ -1,0 +1,400 @@
+"""Shared standalone object production, independent of maps and gameplay."""
+import base64
+from collections import deque
+from datetime import datetime, timezone
+import hashlib
+from io import BytesIO
+import json
+import math
+from pathlib import Path
+import secrets
+import shutil
+import zipfile
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter
+
+from asset_repository import AssetRepository, atomic, name, read
+from task_lock import task_lock
+from terrain import decode_image
+from terrain_images import configured, generate_materials
+
+KINDS={
+    'rock':{'label':'石头','subject':'rock','composition':'one compact stone',
+            'description':'温暖田园风2D游戏中的一块矮胖灰褐色石头，轮廓略不规则，大块面手绘，少量细小裂纹，低对比度，柔和色彩。',
+            'collision_usage':'blocking','width_ratio':.55,'depth_ratio':.16,
+            'hint':'石头的阻挡占地需要人工确认；默认椭圆仅是初值。'},
+    'crate':{'label':'木箱','subject':'wooden crate','composition':'one closed wooden crate with visible top and front faces',
+             'description':'温暖田园风2D游戏中的一个方形旧木箱，暖棕木材，简洁板缝，大块面手绘，柔和色彩，轻微磨损。',
+             'collision_usage':'blocking','width_ratio':.75,'depth_ratio':.25,
+             'hint':'木箱使用统一落地锚点；椭圆建议不代表箱底的精确占地，可按游戏需要另行定义。'},
+    'bush':{'label':'灌木','subject':'bush','composition':'one dense rounded bush with a connected foliage silhouette, no detached leaves or open interior gaps',
+            'description':'温暖田园风2D游戏中的一丛矮灌木，浓密圆润的绿色叶团，少量浅绿亮面，大块面手绘，轮廓完整，没有脱落叶片。',
+            'collision_usage':'optional','width_ratio':.45,'depth_ratio':.14,
+            'hint':'灌木可作装饰或阻挡；细叶和内部孔洞不能靠单色抠图可靠处理，优先导入透明PNG。'},
+    'custom':{'label':'自定义物件','subject':'object described in the art direction','composition':'one complete connected standalone object',
+              'description':'',
+              'collision_usage':'none','width_ratio':.55,'depth_ratio':.16,
+              'hint':'自定义物件默认不提供碰撞形状。透明、镂空或复杂细枝物件建议导入透明PNG。'}
+}
+COLLISION_USAGES=('blocking','optional','none')
+
+
+def identity():
+    return datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+secrets.token_hex(4)
+
+
+def decode_sprite(content):
+    try:
+        raw=base64.b64decode(content,validate=True)
+        if not raw or len(raw)>8*1024*1024: raise ValueError('物件图片需小于8MB')
+        with Image.open(BytesIO(raw)) as image:
+            if min(image.size)<32 or image.width*image.height>4_000_000:
+                raise ValueError('物件图片至少32px，且不超过400万像素')
+            image.load()
+            return image.convert('RGBA')
+    except (OSError,TypeError,Image.DecompressionBombError):
+        raise ValueError('请选择有效的PNG / JPEG / WebP图片') from None
+
+
+def validate(data):
+    kind=data.get('kind','rock')
+    if not isinstance(kind,str) or kind not in KINDS: raise ValueError('未知物件类型')
+    title=data.get('title',KINDS[kind]['label']+'素材')
+    description=data.get('description','')
+    mode=data.get('mode','ai')
+    size=data.get('size',256)
+    if not isinstance(title,str) or not 1<=len(title.strip())<=60: raise ValueError('名称需为1–60字')
+    if not isinstance(description,str) or len(description)>2000 or (mode=='ai' and not description.strip()):
+        raise ValueError('AI模式请填写1–2000字的物件描述')
+    if mode not in ('ai','import'): raise ValueError('请选择AI生成或导入物件')
+    if type(size) is not int or size not in (128,256): raise ValueError('输出尺寸须为128或256')
+    usage=data.get('collision_usage',KINDS[kind]['collision_usage'])
+    if not isinstance(usage,str) or usage not in COLLISION_USAGES: raise ValueError('未知碰撞建议用途')
+    return {'title':title.strip(),'description':description.strip(),'mode':mode,'size':size,'kind':kind,'collision_usage':usage}
+
+
+def prompt(description,kind='rock'):
+    profile=KINDS[kind]
+    return (f'Create exactly ONE complete standalone {profile["subject"]} sprite for a 2D game. '
+            f'The AI must draw the full {profile["subject"]} silhouette and its surface, not a texture swatch. '
+            'Orthographic three-quarter view from above, visible top and front, no perspective convergence. '
+            f'Centered {profile["composition"]}, full silhouette within the square, 12% empty margin on every side. '
+            'No other objects, no ground plane, no grass, no cast shadow, no contact shadow, no horizon. '
+            'Soft upper-left lighting painted on the object only. '
+            'Background must be perfectly flat solid RGB(255,0,255), hex #FF00FF, touching all four edges. '
+            'No magenta or pink on the object; no reflected background color. '
+            'No transparency, no checkerboard, no text, no labels, no border, no collage or variants. '
+            'Use the reference only for palette, brushwork and detail scale; do not copy its composition. '
+            'Art direction: '+description)
+
+
+def prepare(root,data):
+    spec=validate(data)
+    if spec['mode']=='ai' and not configured(root): raise ValueError('请先在项目.env配置图片服务密钥')
+    image=decode_sprite(data.get('image')) if spec['mode']=='import' else None
+    reference=decode_image(data['reference']) if data.get('reference') else None
+    job_id=identity()
+    folder=AssetRepository(root).scoped('.local/props/jobs/'+job_id,'.local/props/jobs')
+    (folder/'inputs').mkdir(parents=True)
+    if image is not None: image.save(folder/'inputs/original.png')
+    if reference is not None: reference.save(folder/'inputs/reference.png')
+    spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind']) if spec['mode']=='ai' else '')
+    job={'id':job_id,'status':'queued','stage':'等待制作物件','error':None,'spec':spec,
+         'created_at':datetime.now(timezone.utc).isoformat()}
+    atomic(folder/'job.json',job)
+    return job
+
+
+def cutout(image):
+    """Keep supplied alpha, or remove border-connected magenta / near-white.
+
+    Background removal requires foreground/background color separation. It is not
+    semantic segmentation and must reject ordinary opaque scene backgrounds.
+    """
+    image=image.convert('RGBA')
+    alpha=np.asarray(image.getchannel('A'))
+    if alpha.min()<255:
+        if not np.any(alpha>16): raise ValueError('物件图片完全透明')
+        if np.any(alpha[0]>16) or np.any(alpha[-1]>16) or np.any(alpha[:,0]>16) or np.any(alpha[:,-1]>16):
+            raise ValueError('物件接触画布边缘，可能被裁断，请补充透明留白后导入')
+        return image,{'method':'preserve_supplied_alpha','art_review':'pending'}
+    rgb=np.asarray(image.convert('RGB')).astype(np.int16)
+    h,w=rgb.shape[:2]
+    edges=np.concatenate((rgb[0],rgb[-1],rgb[:,0],rgb[:,-1]))
+    white_key=np.median(edges,axis=0)
+    white=bool(np.min(white_key)>=245 and np.max(white_key)-np.min(white_key)<=5
+               and np.mean(np.max(np.abs(edges-white_key),axis=1)<=8)>=.98)
+    key=white_key if white else np.array([255,0,255])
+    tolerance=12 if white else 55
+    distance=np.max(np.abs(rgb-key),axis=2)
+    border=np.concatenate((distance[0],distance[-1],distance[:,0],distance[:,-1]))
+    if np.mean(border<=tolerance)<.98:
+        raise ValueError('背景未识别为近纯白或纯品红；请导入透明PNG，或使用四边留白的单色背景图')
+    candidate=distance<=tolerance
+    removed=np.zeros((h,w),dtype=bool)
+    queue=deque()
+    for y,x in [(0,x) for x in range(w)]+[(h-1,x) for x in range(w)]+[(y,0) for y in range(h)]+[(y,w-1) for y in range(h)]:
+        if candidate[y,x] and not removed[y,x]: removed[y,x]=True;queue.append((y,x))
+    while queue:
+        y,x=queue.popleft()
+        for ny,nx in ((y-1,x),(y+1,x),(y,x-1),(y,x+1)):
+            if 0<=ny<h and 0<=nx<w and candidate[ny,nx] and not removed[ny,nx]:
+                removed[ny,nx]=True;queue.append((ny,nx))
+    # Decontaminate only the narrow boundary ring, preserving interior colors.
+    dilated=np.asarray(Image.fromarray(removed.astype('uint8')*255).filter(ImageFilter.MaxFilter(7)))>0
+    ring=dilated & ~removed
+    foreground=rgb.astype(float)/255
+    coverage=np.ones((h,w),dtype=float)
+    if white:
+        # Infer foreground color from the nearest interior pixel, then unmix the
+        # white matte in the boundary ring. Never erase white highlights inside.
+        stable=np.asarray(Image.fromarray((~removed).astype('uint8')*255).filter(ImageFilter.MinFilter(7)))>0
+        stable &= distance>36
+        yy,xx=np.nonzero(ring)
+        found=np.zeros(len(yy),dtype=bool)
+        sample=foreground[yy,xx].copy()
+        offsets=sorted(((dy,dx) for dy in range(-8,9) for dx in range(-8,9)),key=lambda p:p[0]*p[0]+p[1]*p[1])
+        for dy,dx in offsets:
+            sy=np.clip(yy+dy,0,h-1);sx=np.clip(xx+dx,0,w-1)
+            use=~found & stable[sy,sx]
+            sample[use]=foreground[sy[use],sx[use]];found[use]=True
+            if found.all(): break
+        background=key/255
+        delta=sample-background
+        a=np.sum((foreground[yy,xx]-background)*delta,axis=1)/np.maximum(np.sum(delta*delta,axis=1),.0001)
+        coverage[yy[found],xx[found]]=np.clip(a[found],0,1)
+    else:
+        chroma=np.clip((np.minimum(rgb[:,:,0],rgb[:,:,2])-rgb[:,:,1])/255,0,1)
+        coverage[ring]=1-chroma[ring]
+    coverage[removed]=0
+    corrected=(foreground-(1-coverage[:,:,None])*(key/255))/np.maximum(coverage[:,:,None],.001)
+    rgba=np.dstack((np.clip(corrected*255,0,255).astype('uint8'),np.round(coverage*255).astype('uint8')))
+    rgba[removed]=0
+    result=Image.fromarray(rgba,'RGBA')
+    bbox=result.getchannel('A').point(lambda v:255 if v>16 else 0).getbbox()
+    fraction=np.mean(coverage>.1)
+    if not bbox or not .01<fraction<.85: raise ValueError('未识别到合理大小的单个物件，请检查原图')
+    if min(bbox[0],bbox[1],w-bbox[2],h-bbox[3])<3: raise ValueError('物件接近画布边缘，可能被裁断')
+    return result,{'method':'border_connected_near_white_key' if white else 'border_connected_magenta_key',
+                   'key_rgb':key.tolist(),'removed_fraction':round(float(removed.mean()),4),
+                   'edge_color_correction':'3px_boundary_only','art_review':'pending',
+                   'limitations':'仅适合主体与背景可区分的实心物件；白色主体可能与白底混淆。未做语义分割，内部孔洞和碎屑需人工检查'}
+
+
+def number(value,default,low,high,label):
+    if value is None: return default
+    if type(value) not in (int,float) or not math.isfinite(value) or not low<=value<=high:
+        raise ValueError(label+'超出有效范围')
+    return round(value,2)
+
+
+def single_object(image):
+    """Reject multiple large detached silhouettes; this is not semantic recognition."""
+    alpha=image.getchannel('A').copy();alpha.thumbnail((512,512),Image.Resampling.NEAREST)
+    mask=np.asarray(alpha)>16
+    # Bridge tiny antialias gaps without merging clearly separated objects.
+    mask=np.asarray(Image.fromarray(mask.astype('uint8')*255).filter(ImageFilter.MaxFilter(3)))>0
+    visited=np.zeros(mask.shape,dtype=bool);h,w=mask.shape;sizes=[]
+    for y,x in zip(*np.nonzero(mask)):
+        if visited[y,x]: continue
+        visited[y,x]=True;queue=deque([(y,x)]);count=0
+        while queue:
+            cy,cx=queue.popleft();count+=1
+            for ny,nx in ((cy-1,cx),(cy+1,cx),(cy,cx-1),(cy,cx+1)):
+                if 0<=ny<h and 0<=nx<w and mask[ny,nx] and not visited[ny,nx]:
+                    visited[ny,nx]=True;queue.append((ny,nx))
+        sizes.append(count)
+    sizes.sort(reverse=True)
+    if not sizes: raise ValueError('未识别到物件')
+    major=sum(count>=max(8,sizes[0]*.015) for count in sizes)
+    if major>1: raise ValueError('发现多个明显分离的前景区域，请每次只提供一个完整物件；分离配件请先合成或分别生产')
+    return {'method':'connected_silhouette_check','major_regions':major,'minor_regions':len(sizes)-major,
+            'semantic_single_object':'not_verified'}
+
+
+def package(root,original,spec,package_id=None,source=None,provenance=None,settings=None):
+    """Stage immutable exports, including inputs and provider receipts."""
+    with task_lock(root):
+        assets=AssetRepository(root);package_id=name(package_id or identity())
+        target=assets.scoped('prop-kits/'+package_id,'prop-kits')
+        if target.exists():
+            load_package(root,package_id)
+            return target
+        sprite,processing=cutout(original)
+        processing['single_object']=single_object(sprite)
+        bbox=sprite.getchannel('A').getbbox()
+        crop=sprite.crop(bbox)
+        size=spec['size'];padding=size//16
+        factor=(size-padding*2)/max(crop.size)
+        dimensions=tuple(max(1,round(v*factor)) for v in crop.size)
+        crop=crop.resize(dimensions,Image.Resampling.LANCZOS)
+        canvas=Image.new('RGBA',(size,size))
+        offset=((size-dimensions[0])//2,size-padding-dimensions[1])
+        canvas.paste(crop,offset)
+        settings=settings or {}
+        anchor=[number(settings.get('anchor_x'),size/2,0,size-1,'锚点X'),
+                number(settings.get('anchor_y'),size-padding-1,0,size-1,'锚点Y')]
+        kind=spec.get('kind','rock');profile=KINDS[kind]
+        usage=settings.get('collision_usage',spec.get('collision_usage',profile['collision_usage']))
+        if not isinstance(usage,str) or usage not in COLLISION_USAGES: raise ValueError('未知碰撞建议用途')
+        width=number(settings.get('collision_width'),max(1,round(dimensions[0]*profile['width_ratio'],2)),1,size,'碰撞宽度')
+        depth=number(settings.get('collision_depth'),max(1,round(dimensions[1]*profile['depth_ratio'],2)),1,size,'碰撞深度')
+        # The foot anchor is the bottom of this ellipse. Points are local to it.
+        polygon=[[round(math.cos(i*math.pi/8)*width/2,2),round(-depth/2+math.sin(i*math.pi/8)*depth/2,2)] for i in range(16)]
+        staging=assets.scoped('.local/prop-builds/'+package_id,'.local/prop-builds')
+        if staging.exists(): shutil.rmtree(staging)
+        (staging/'inputs').mkdir(parents=True)
+        if source and (source/'inputs/original.png').is_file():
+            shutil.copyfile(source/'inputs/original.png',staging/'inputs/original.png')
+        else:
+            original.save(staging/'inputs/original.png')
+        canvas.save(staging/'sprite.png')
+        sprite.save(staging/'cutout.png')
+        for relative in ('generation.json','inputs/reference.png'):
+            if source and (source/relative).is_file():
+                shutil.copyfile(source/relative,staging/relative)
+        atomic(staging/'production.json',spec)
+        (staging/'prompt.txt').write_text(spec.get('material_prompt',''),encoding='utf-8')
+        preview=Image.new('RGB',(size*3,size),(239,239,235))
+        for index,color in enumerate(((237,235,225),(54,63,74),(116,139,99))):
+            panel=Image.new('RGB',(size,size),color)
+            if index==0:
+                draw=ImageDraw.Draw(panel)
+                for y in range(0,size,16):
+                    for x in range(0,size,16):
+                        if (x//16+y//16)%2: draw.rectangle((x,y,x+15,y+15),fill=(208,210,206))
+            panel.paste(canvas,(0,0),canvas);preview.paste(panel,(index*size,0))
+        preview.save(staging/'preview.png')
+        overlay=preview.crop((size,0,size*2,size));draw=ImageDraw.Draw(overlay)
+        projected=[(anchor[0]+x,anchor[1]+y) for x,y in polygon]
+        if usage!='none': draw.line(projected+[projected[0]],fill=(255,145,61),width=2)
+        x,y=anchor;draw.line((x-6,y,x+6,y),fill=(45,224,226),width=2);draw.line((x,y-6,x,y+6),fill=(45,224,226),width=2)
+        overlay.save(staging/'anchor_collision.png')
+        origin=provenance or {'art_source':'ai_complete_object' if spec['mode']=='ai' else 'external_complete_object'}
+        manifest={'schema':'studio.static-prop/0.1','id':package_id,'title':spec['title'],'asset_family':'static_prop',
+                  'asset_kind':kind,'production_ready':False,'provenance':origin,'canvas_px':[size,size],
+                  'image':'sprite.png','anchor_px':anchor,'sprite_offset_px':[-anchor[0],-anchor[1]],
+                  'view':'orthographic_three_quarter','processing':processing,
+                  'normalization':{'source_bbox_px':list(bbox),'content_px':list(dimensions),'offset_px':list(offset),
+                                   'scale_factor':factor,'world_scale':'caller_defined'},
+                  'suggested_collision':{'enabled_by_default':False,'suggestions_only':True,
+                       'coordinate_space':'anchor_local_px','polygon':polygon if usage!='none' else [],'width_px':width,'depth_px':depth,'usage':usage,
+                       'layers_and_masks':'caller_defined','source':'editable_ellipse_heuristic_not_semantic'},
+                  'validation':{'art':'pending','transparent_edges':'pending_visual_review','anchor':'pending_manual_review',
+                                'engine_physics':'not_tested','occlusion':'not_tested'},
+                  'limitations':['只生产单个物件候选；连通区域检查不等于语义识别，不检查视角和风格是否符合游戏',
+                                 '锚点与碰撞为可调整建议，不是AI识别的实际接触面','没有导航、交互、地图或游戏行为']}
+        (staging/'INTEGRATION.md').write_text(
+            '# 独立物件素材候选\n\n使用sprite.png（透明RGBA）。Sprite2D.centered=false，offset=sprite_offset_px；'
+            '节点position是游戏中落脚点。PNG像素尺寸不代表世界单位。\n\n'
+            '建议碰撞点相对锚点，Y向下，默认不启用；usage为blocking（阻挡候选）、optional（按游戏选择）或none（不提供形状）。游戏自行选择层与掩码，按实际物件调整落脚点与碰撞。'
+            '不可用整张图片轮廓替代落地占用范围。本包不提供物理、导航或角色遮挡已通过的保证。\n\n'
+            'preview.png是三种固定底色的边缘检查图；anchor_collision.png青色十字是锚点，橙色是建议碰撞。'
+            'cutout.png保留裁切前抠图，inputs/original.png保留解码后原始图。原始提示词与参考图（如有）一并交付。'
+            '单色抠图只从边界连通区域移除背景；近纯白与品红背景自动识别，边缘估算Alpha并校正残色。主体接近背景颜色、透明物或复杂内部空洞应使用透明PNG。\n',encoding='utf-8')
+        manifest['files_sha256']={str(p.relative_to(staging)):hashlib.sha256(p.read_bytes()).hexdigest()
+                                  for p in staging.rglob('*') if p.is_file()}
+        atomic(staging/'manifest.json',manifest)
+        with zipfile.ZipFile(staging/'kit.zip','w',zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(staging.rglob('*')):
+                if path.is_file() and path.name!='kit.zip': archive.write(path,str(path.relative_to(staging)))
+        target.parent.mkdir(parents=True,exist_ok=True);staging.rename(target)
+        return target
+
+
+def load_package(root,package_id):
+    try:
+        assets=AssetRepository(root);package_id=name(package_id)
+        folder=assets.scoped('prop-kits/'+package_id,'prop-kits');manifest=read(folder/'manifest.json')
+        if not isinstance(manifest,dict) or manifest.get('schema')!='studio.static-prop/0.1' or manifest.get('id')!=package_id:
+            raise ValueError('无效物件清单')
+        expected=manifest['files_sha256']
+        if not {'sprite.png','cutout.png','inputs/original.png','preview.png','anchor_collision.png','production.json','prompt.txt','INTEGRATION.md'}.issubset(expected):
+            raise ValueError('物件清单缺少必要文件')
+        if manifest.get('provenance',{}).get('art_source')=='ai_complete_object':
+            if 'generation.json' not in expected: raise ValueError('AI物件缺少生成记录')
+            receipt=read(folder/'generation.json',{})
+            if receipt.get('ground',{}).get('sha256')!=expected['inputs/original.png']:
+                raise ValueError('AI原图与生成记录指纹不一致')
+        with zipfile.ZipFile(folder/'kit.zip') as archive:
+            files=archive.namelist()
+            if len(files)!=len(set(files)) or set(files)!=set(expected)|{'manifest.json'}:
+                raise ValueError('ZIP文件清单不匹配')
+            if json.loads(archive.read('manifest.json'))!=manifest: raise ValueError('ZIP与磁盘清单不一致')
+            for relative,digest in expected.items():
+                file=assets.scoped('prop-kits/'+package_id+'/'+relative,'prop-kits/'+package_id)
+                raw=archive.read(relative)
+                if hashlib.sha256(raw).hexdigest()!=digest or raw!=file.read_bytes(): raise ValueError('物件文件指纹不一致：'+relative)
+        return manifest
+    except (OSError,TypeError,KeyError,zipfile.BadZipFile,UnicodeError) as error:
+        raise ValueError('物件包缺失或损坏：'+str(error)) from None
+
+
+def catalog(root):
+    kits=[]
+    for path in sorted((Path(root)/'prop-kits').glob('*/manifest.json'),reverse=True):
+        if path.parent.is_symlink(): continue
+        manifest=read(path)
+        if not isinstance(manifest,dict): continue
+        try:
+            load_package(root,path.parent.name);manifest['integrity']={'passed':True}
+        except ValueError as error: manifest['integrity']={'passed':False,'error':str(error)}
+        kits.append(manifest)
+    jobs=[]
+    for path in (Path(root)/'.local/props/jobs').glob('*/job.json'):
+        job=read(path)
+        if job:
+            job['original_available']=(path.parent/'inputs/original.png').is_file()
+            jobs.append(job)
+    return {'kits':kits,'jobs':sorted((j for j in jobs if j),key=lambda j:j['created_at'],reverse=True)[:60]}
+
+
+def remake(root,data):
+    with task_lock(root):
+        source_id=name(data.get('source_kit'));manifest=load_package(root,source_id)
+        folder=AssetRepository(root).scoped('prop-kits/'+source_id,'prop-kits')
+        spec=read(folder/'production.json')
+        with Image.open(folder/'inputs/original.png') as image: original=image.convert('RGBA')
+        settings={'anchor_x':data.get('anchor_x',manifest['anchor_px'][0]),
+                  'anchor_y':data.get('anchor_y',manifest['anchor_px'][1]),
+                  'collision_width':data.get('collision_width',manifest['suggested_collision']['width_px']),
+                  'collision_depth':data.get('collision_depth',manifest['suggested_collision']['depth_px']),
+                  'collision_usage':data.get('collision_usage',manifest['suggested_collision'].get('usage',KINDS[manifest.get('asset_kind','rock')]['collision_usage']))}
+        return package(root,original,spec,source=folder,settings=settings,
+                       provenance={**manifest['provenance'],'parent_kit':source_id,'this_build':'reuse_no_ai_call'})
+
+
+def execute(root,job_id):
+    folder=AssetRepository(root).scoped('.local/props/jobs/'+name(job_id),'.local/props/jobs')
+    with task_lock(root):
+        job=read(folder/'job.json')
+        def progress(stage):
+            job.update(status='running',stage=stage.replace('地面材质','完整物件'),error=None)
+            atomic(folder/'job.json',job)
+        try:
+            target=Path(root)/'prop-kits'/job_id
+            if target.exists(): load_package(root,job_id)
+            else:
+                progress('准备物件原图')
+                if job['spec']['mode']=='ai':
+                    generated=folder/'inputs/ground.png'
+                    receipt=read(folder/'generation.json',{}).get('ground',{})
+                    if not generated.is_file() or hashlib.sha256(generated.read_bytes()).hexdigest()!=receipt.get('sha256'):
+                        generate_materials(folder,job['spec'],progress)
+                    else:
+                        progress('复用已生成的完整物件原图')
+                    shutil.copyfile(generated,folder/'inputs/original.png')
+                progress('透明背景处理与素材导出')
+                with Image.open(folder/'inputs/original.png') as image:
+                    package(root,image.convert('RGBA'),job['spec'],job_id,source=folder)
+            job.update(status='complete',stage='物件素材已完成',kit_id=job_id,error=None)
+        except Exception as error:
+            job.update(status='failed',stage='制作失败',error=str(error))
+        atomic(folder/'job.json',job)
+
+
+if __name__=='__main__':
+    import sys
+    root=Path(__file__).resolve().parent.parent
+    with task_lock(root,inherited_fd=int(sys.argv[2])): execute(root,sys.argv[1])

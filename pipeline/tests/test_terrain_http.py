@@ -45,6 +45,28 @@ class TerrainHTTPTests(unittest.TestCase):
         self.assertEqual(caught.exception.code,403)
         self.assertFalse((self.root/'.local/terrain').exists())
 
+    def test_components_require_auth_and_publish_separate_downloadable_packages(self):
+        params={'mode':'demo'}
+        endpoint=self.base+'/api/components/build'
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(Request(endpoint,data=json.dumps(params).encode(),headers={'Content-Type':'application/json'}))
+        self.assertEqual(caught.exception.code,403)
+        headers={'Content-Type':'application/json','X-Studio-Token':self.panel.token}
+        with urlopen(Request(endpoint,data=json.dumps(params).encode(),headers=headers)) as response:kit=json.load(response)
+        self.assertEqual(kit['asset_family'],'connected_component')
+        self.assertEqual(kit['ai_calls'],0)
+        self.assertEqual(len(kit['modules']),12)
+        with urlopen(self.base+'/api/components/state') as response:
+            self.assertTrue(json.load(response)['kits'][0]['integrity']['passed'])
+        with urlopen(self.base+'/component-asset/'+kit['id']+'/kit.zip') as response:
+            self.assertGreater(len(response.read()),0)
+        for path in ('../.env',kit['id']+'/inputs/wood.png'):
+            with self.assertRaises(HTTPError):urlopen(self.base+'/component-asset/'+path)
+        (self.root/'component-kits'/kit['id']/'kit.zip').write_bytes(b'bad zip')
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(self.base+'/component-asset/'+kit['id']+'/kit.zip')
+        self.assertEqual(caught.exception.code,400)
+
     def test_job_log_whitelists_fields_and_rejects_outside_paths(self):
         from unittest.mock import patch
         job=prepare(self.root,dict(title='test',description='test',mode='demo'))
@@ -56,6 +78,69 @@ class TerrainHTTPTests(unittest.TestCase):
         self.assertEqual(result['events'][0]['response']['error'],'[REDACTED]')
         self.assertNotIn('Authorization',result['events'][0])
         self.assertNotIn('data',result['events'][0]['response'])
+
+    def test_component_ai_requires_auth_and_exposes_separate_jobs(self):
+        from unittest.mock import patch
+        from component_jobs import prepare as prepare_component
+        endpoint=self.base+'/api/components/generate'
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(Request(endpoint,data=b'{}',headers={'Content-Type':'application/json'}))
+        self.assertEqual(caught.exception.code,403)
+        with patch('component_jobs.configured',return_value=True):
+            job=prepare_component(self.root,{'description':'wood grain'})
+        with patch.object(self.panel,'start_terrain',return_value=job) as start:
+            with urlopen(Request(endpoint,data=b'{"description":"wood"}',headers={
+                'Content-Type':'application/json','X-Studio-Token':self.panel.token})) as response:
+                self.assertEqual(json.load(response)['id'],job['id'])
+            start.assert_called_once_with({'description':'wood'},components=True)
+        with urlopen(self.base+'/api/components/state') as response:
+            state=json.load(response)
+        self.assertEqual(state['jobs'][0]['id'],job['id'])
+        self.assertEqual(state['jobs'][0]['status'],'failed')  # No worker owns this prepared receipt.
+        with urlopen(self.base+'/api/components/job-log?id='+job['id']) as response:
+            self.assertEqual(json.load(response)['events'],[])
+
+    def test_static_prop_routes_auth_production_remake_and_scoping(self):
+        import base64
+        from PIL import Image, ImageDraw
+        from unittest.mock import patch
+        from static_props import prepare as prepare_prop, execute as execute_prop
+        image=Image.new('RGBA',(64,64));ImageDraw.Draw(image).ellipse((12,16,52,52),fill=(120,120,100,255))
+        raw=BytesIO();image.save(raw,format='PNG')
+        data={'mode':'import','image':base64.b64encode(raw.getvalue()).decode()}
+        endpoint=self.base+'/api/props/generate'
+        headers={'Content-Type':'application/json','X-Studio-Token':self.panel.token}
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(Request(endpoint,data=json.dumps(data).encode(),headers={'Content-Type':'application/json'}))
+        self.assertEqual(caught.exception.code,403)
+        job=prepare_prop(self.root,data)
+        with patch.object(self.panel,'start_terrain',return_value=job) as start:
+            with urlopen(Request(endpoint,data=json.dumps(data).encode(),headers=headers)) as response:
+                self.assertEqual(json.load(response)['id'],job['id'])
+            start.assert_called_once_with(data,props=True)
+        execute_prop(self.root,job['id'])
+        with urlopen(self.base+'/api/props/state') as response: state=json.load(response)
+        self.assertEqual(state['jobs'][0]['status'],'complete')
+        self.assertTrue(state['jobs'][0]['original_available'])
+        self.assertEqual(state['kits'][0]['provenance']['art_source'],'external_complete_object')
+        with urlopen(self.base+'/props.html') as response:self.assertIn('prop-form',response.read().decode())
+        with urlopen(self.base+'/api/props/job-image?id='+job['id']) as response:self.assertTrue(response.read().startswith(b'\x89PNG'))
+        with urlopen(Request(self.base+'/api/props/remake',data=json.dumps({'source_kit':job['id'],'anchor_x':124}).encode(),headers=headers)) as response:
+            adjusted=json.load(response)
+        self.assertEqual(adjusted['anchor_px'][0],124)
+        self.assertNotEqual(adjusted['id'],job['id'])
+        with urlopen(self.base+'/prop-asset/'+adjusted['id']+'/kit.zip') as response:self.assertGreater(len(response.read()),100)
+        for path in ['/api/props/job-image?id=../secret','/api/props/job-log?id=../secret','/prop-asset/'+job['id']+'/inputs/original.png']:
+            with self.assertRaises(HTTPError):urlopen(self.base+path)
+        folder=self.root/'.local/props/jobs'/job['id']
+        (folder/'http.jsonl').write_text(json.dumps({'event':'response','Authorization':'secret','response':{'id':'remote','error':'secret','data':'private'}})+'\n')
+        with patch('terrain_images.load_config',return_value={'OPENAI_API_KEY':'secret'}):
+            with urlopen(self.base+'/api/props/job-log?id='+job['id']) as response:log=json.load(response)
+        self.assertEqual(log['events'][0]['response']['error'],'[REDACTED]')
+        self.assertNotIn('Authorization',log['events'][0])
+        (self.root/'prop-kits'/adjusted['id']/'sprite.png').write_bytes(b'changed')
+        with self.assertRaises(HTTPError) as caught:urlopen(self.base+'/prop-asset/'+adjusted['id']+'/kit.zip')
+        self.assertEqual(caught.exception.code,400)
         with self.assertRaises(HTTPError): urlopen(self.base+'/api/terrain/job-log?id=..%2F.env')
 
     def test_export_and_preview_are_public_but_internal_files_cannot_be_read(self):
