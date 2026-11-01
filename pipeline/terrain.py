@@ -58,7 +58,11 @@ def validate(data):
     finish = data.get('finish', 'natural')
     if finish not in ('natural', 'classic'):
         raise ValueError('未知素材处理方案')
-    return dict(title=title.strip(), description=description.strip(), tile_size=size,
+    asset_type=data.get('asset_type','terrain')
+    if asset_type not in ('terrain','material'): raise ValueError('未知素材类型')
+    material_kind=data.get('material_kind','generic')
+    if material_kind not in ('generic','grass','sand','water','stone'): raise ValueError('未知材质分类')
+    return dict(asset_type=asset_type, material_kind=material_kind, title=title.strip(), description=description.strip(), tile_size=size,
                 road_width=width, mode=mode, view='top_down', seed=17, finish=finish)
 
 
@@ -200,7 +204,47 @@ def render_grid(ground, tiles, grid, variants=None):
     return result
 
 
+
+def compile_material(folder,spec,identity):
+    size=spec['tile_size']
+    with Image.open(folder/'inputs/ground.png') as source:
+        images=material_variants(source,size) if spec.get('finish')=='natural' else [periodic(source.convert('RGB'),size)]
+    (folder/'tiles').mkdir(exist_ok=True)
+    atlas=Image.new('RGB',(size*len(images),size))
+    preview=Image.new('RGB',(size*12,size*9))
+    variants=[]
+    for index,image in enumerate(images):
+        relative='tiles/ground'+(f'_v{index}' if index else '')+'.png'
+        image.save(folder/relative);atlas.paste(image,(size*index,0))
+        variants.append({'id':index,'ground':relative,'ground_cell':[index,0],'tiles':[]})
+    for y in range(9):
+        for x in range(12): preview.paste(images[variant_at(x,y,len(images))],(x*size,y*size))
+    worst=0;pairs=0
+    for a in images:
+        for b in images:
+            aa,bb=np.array(a,dtype=np.int16),np.array(b,dtype=np.int16)
+            for left,right in [(aa[:,-1],bb[:,0]),(aa[-1],bb[0])]:
+                worst=max(worst,int(np.abs(left-right).max()));pairs+=1
+    if worst: raise ValueError('材质边缘检查失败')
+    atlas.save(folder/'atlas.png');preview.save(folder/'preview.png');images[0].save(folder/'ground_material.png')
+    manifest={'schema':'studio.terrain-kit/1.1','id':identity or folder.name,**spec,
+        'source_sha256':{p.name:digest(p) for p in (folder/'inputs').glob('*.png')},
+        'ground':variants[0]['ground'],'ground_cell':[0,0],'variants':variants,'tiles':[],
+        'variant_rule':'coordinate_hash_v1','variant_seed':17,'atlas':'atlas.png',
+        'validation':{'passed':True,'matching_edge_pairs':pairs,'max_channel_difference':0},
+        'art_review':'pending','limitations':['变化块共用边缘，仍需复核纹理重复和风格；不包含道路或动画。']}
+    (folder/'INTEGRATION.md').write_text('# 独立材质素材\n\n按 manifest.json 的 variants[].ground 或 ground_cell 读取变化块。所有变化块可相邻使用。'
+        '可作为地表过渡或静态水岸的来源。没有道路块、动画、碰撞或深度数据。边缘检查不代表美术验收。\n',encoding='utf-8')
+    manifest['files_sha256']={str(p.relative_to(folder)):digest(p) for p in folder.rglob('*') if p.is_file() and p.name not in ('manifest.json','kit.zip')}
+    atomic(folder/'manifest.json',manifest)
+    with zipfile.ZipFile(folder/'kit.zip','w',zipfile.ZIP_DEFLATED) as archive:
+        for p in sorted(folder.rglob('*')):
+            if p.is_file() and p.name!='kit.zip': archive.write(p,str(p.relative_to(folder)))
+    return manifest
+
+
 def compile_kit(folder, spec, identity=None):
+    if spec.get('asset_type')=='material': return compile_material(folder,spec,identity)
     size = spec['tile_size']
     natural = spec.get('finish') == 'natural'
     materials, choices = {}, {}
@@ -318,20 +362,24 @@ def prepare(root, data):
             source_path=assets.scoped('terrain-kits/'+source_id+'/inputs/'+role+'.png','terrain-kits/'+source_id)
             expected=manifest.get('source_sha256',{}).get(role+'.png')
             if role=='reference' and not expected: continue
+            if role=='road' and manifest.get('asset_type')=='material': continue
             if not source_path.is_file() or digest(source_path)!=expected:
                 raise ValueError('来源材质发生变化，不能复用')
             with Image.open(source_path) as image: images[role]=image.convert('RGB')
         generation=source/'generation.json'
         if generation.is_file(): parent_generation=read(generation)
         spec['source_kit']=source_id
+        spec['asset_type']=manifest.get('asset_type','terrain')
+        spec['material_kind']=manifest.get('material_kind','generic')
     if data.get('reference'):
         images['reference'] = decode_image(data['reference'])
     if spec['mode'] == 'import':
-        for role in ('ground', 'road'):
+        for role in (('ground',) if spec['asset_type']=='material' else ('ground','road')):
             images[role] = decode_image(data.get(role))
     elif spec['mode'] == 'demo':
         images = {'ground': demo_material(256, (112, 139, 75), 17),
                   'road': demo_material(256, (172, 143, 101), 23), **images}
+    if spec['asset_type']=='material': images.pop('road',None)
     identity = datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(4)
     folder = assets.scoped('.local/terrain/jobs/'+identity, '.local/terrain')
     (folder/'inputs').mkdir(parents=True)

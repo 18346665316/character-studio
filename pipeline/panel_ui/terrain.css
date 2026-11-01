@@ -3,3 +3,5 @@
 @media(max-width:740px){.terrain-layout{grid-template-columns:1fr}.terrain-form{position:static}.terrain-header{padding:24px 18px;align-items:flex-start;flex-direction:column}.terrain-empty{min-height:220px}}
 .terrain-section-heading>div{flex-wrap:wrap;justify-content:flex-end}.terrain-section-heading>div>*{flex-shrink:0;white-space:nowrap}.terrain-section-heading select{width:auto}.terrain-section-heading label{width:auto;margin:0;font-size:12px}.terrain-section-heading h2{white-space:nowrap}
 .surface-preview{display:block;width:100%;height:auto;image-rendering:pixelated;border-radius:6px}#transition-history{max-width:260px}#transition-gallery{margin-top:18px}
+
+.terrain-request-log{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px;background:#f5f6f3;padding:10px}

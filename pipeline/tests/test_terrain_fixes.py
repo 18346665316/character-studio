@@ -16,7 +16,7 @@ from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from asset_repository import read
 from terrain import prepare,execute
-from terrain_images import load_config,configured
+from terrain_images import load_config,configured,Provider
 from terrain_integrity import inspect
 from terrain_transition import build
 
@@ -34,6 +34,46 @@ class TerrainReviewFixes(unittest.TestCase):
                     finish=finish,tile_size=size,ground=content,road=content))
         execute(self.root,job['id'])
         return self.root/'terrain-kits'/job['id']
+
+    def test_transport_audit_retains_evidence_without_credentials_or_image_data(self):
+        client=Provider.__new__(Provider)
+        client.base='https://example.com/v1';client.key='private-test-key'
+        client.audit_path=self.root/'http.jsonl'
+        class Response(BytesIO):
+            status=200
+            headers={'x-request-id':'trace-123'}
+        response=Response(json.dumps({'id':'remote-1','status':'failed','operation':'edit',
+            'error':'failed private-test-key Bearer other-secret',
+            'data':[{'b64_json':'image-bytes-must-not-be-logged'}]}).encode())
+        with patch.object(client,'opener',create=True) as opener:
+            opener.open.return_value=response
+            result=client.request('/images/remote-1')
+        self.assertEqual(result['status'],'failed')
+        raw=client.audit_path.read_text()
+        for secret in ['private-test-key','other-secret','image-bytes-must-not-be-logged']:
+            self.assertNotIn(secret,raw)
+        events=[json.loads(line) for line in raw.splitlines()]
+        self.assertEqual(events[0]['method'],'GET')
+        self.assertEqual(events[1]['http_status'],200)
+        self.assertEqual(events[1]['request_id'],'trace-123')
+        self.assertEqual(events[1]['response']['operation'],'edit')
+
+    def test_reference_request_matches_documented_multipart_edit_contract(self):
+        from email.parser import BytesParser
+        from email.policy import default
+        client=Provider.__new__(Provider)
+        image=self.root/'reference.png';image.write_bytes(b'example-png')
+        with patch.object(client,'request',return_value={'id':'accepted'}) as request:
+            client.create('water texture',[image])
+        endpoint,body,content_type=request.call_args.args
+        self.assertEqual(endpoint,'/images/edits')
+        message=BytesParser(policy=default).parsebytes(('Content-Type: '+content_type+'\r\n\r\n').encode()+body)
+        fields={part.get_param('name',header='content-disposition'):part.get_payload(decode=True)
+                for part in message.iter_parts()}
+        self.assertEqual(fields['async'],b'true')
+        self.assertEqual(fields['n'],b'1')
+        self.assertEqual(fields['image[]'],b'example-png')
+        self.assertEqual(fields['model'],b'gpt-image-2')
 
     def test_config_file_rotation_removal_and_environment_precedence(self):
         with patch.dict(os.environ,{},clear=True):
@@ -73,6 +113,30 @@ class TerrainReviewFixes(unittest.TestCase):
         dest=build(self.root,first.name,second.name,interactive=False)
         self.assertEqual(read(dest/'manifest.json')['variants'],1)
         self.assertEqual(len(read(dest/'manifest.json')['tiles']),16)
+
+    def test_single_material_import_reuse_and_water_transition(self):
+        source=self.kit()
+        content=base64.b64encode((source/'inputs/ground.png').read_bytes()).decode()
+        spec=dict(title='水面',description='外部水面',mode='import',asset_type='material',
+                  material_kind='water',tile_size=64,finish='natural',ground=content)
+        job=prepare(self.root,spec);execute(self.root,job['id'])
+        folder=self.root/'terrain-kits'/job['id']
+        manifest=read(folder/'manifest.json')
+        self.assertEqual(manifest['asset_type'],'material')
+        self.assertEqual(len(manifest['variants']),4)
+        self.assertEqual(manifest['tiles'],[])
+        self.assertFalse((folder/'inputs/road.png').exists())
+        self.assertFalse((folder/'road_material.png').exists())
+        self.assertTrue(inspect(self.root,'terrain-kits',folder.name)['passed'])
+        with zipfile.ZipFile(folder/'kit.zip') as archive:
+            self.assertFalse(any('road' in entry for entry in archive.namelist()))
+        dest=build(self.root,source.name,folder.name,interactive=False,mode='shoreline')
+        self.assertTrue(inspect(self.root,'terrain-transitions',dest.name)['passed'])
+        repeat=prepare(self.root,{**spec,'mode':'reuse','source_kit':folder.name})
+        execute(self.root,repeat['id'])
+        repeated=read(self.root/'terrain-kits'/repeat['id']/'manifest.json')
+        self.assertEqual(repeated['asset_type'],'material')
+        self.assertTrue(repeated['validation']['passed'])
 
     def test_missing_modified_and_mismatched_archive_are_rejected(self):
         kit=self.kit()

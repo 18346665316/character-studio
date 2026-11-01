@@ -6,6 +6,7 @@ for a second generation. Credentials stay in the worker environment.
 import base64
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import time
@@ -80,7 +81,8 @@ class SubmissionRejected(ValueError):
 
 
 class Provider:
-    def __init__(self):
+    def __init__(self, audit_path=None):
+        self.audit_path = Path(audit_path) if audit_path else None
         config=load_config()
         self.base = config.get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE).rstrip('/')
         parsed = urlparse(self.base)
@@ -90,6 +92,18 @@ class Provider:
         if not self.key:
             raise ValueError('未配置图像 API Key，请设置环境变量后重启 Studio')
         self.opener = build_opener(NoRedirect())
+
+    def audit(self, **event):
+        """Local transport evidence only: never record credentials or image bytes."""
+        if not self.audit_path: return
+        event['time_utc']=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+        raw=json.dumps(event,ensure_ascii=False,default=str).replace(self.key,'[REDACTED]')
+        raw=re.sub(r'Bearer\s+[^\s"\\]+','Bearer [REDACTED]',raw,flags=re.I)
+        try:
+            with self.audit_path.open('a',encoding='utf-8') as output: output.write(raw+'\n')
+        except OSError:
+            # Logging must not turn an accepted submission into an uncertain one.
+            pass
 
     def request(self, suffix, payload=None, kind='application/json', binary=False):
         url = self.base + suffix
@@ -102,13 +116,24 @@ class Provider:
             if payload is not None:
                 headers['Content-Type'] = kind
             req = Request(url, data=payload, headers=headers)
+            endpoint=urlparse(url)
+            evidence={'method':req.get_method(),'endpoint':endpoint.scheme+'://'+endpoint.netloc+endpoint.path,
+                      'payload_bytes':len(payload) if payload is not None else 0,'content_type':kind if payload is not None else None}
+            self.audit(event='request',**evidence)
             try:
                 with self.opener.open(req, timeout=90) as response:
                     body = response.read(32*1024*1024+1)
                     if len(body) > 32*1024*1024:
                         raise ValueError('图片服务响应超过 32MB')
-                    return body if binary else json.loads(body)
+                    result=body if binary else json.loads(body)
+                    summary=({k:result[k] for k in ('id','status','operation','model','error') if k in result}
+                             if isinstance(result,dict) else {})
+                    self.audit(event='response',http_status=response.status,response=summary,
+                               request_id=response.headers.get('x-request-id') or response.headers.get('request-id'),**evidence)
+                    return result
             except HTTPError as exc:
+                self.audit(event='http_error',http_status=exc.code,
+                           request_id=exc.headers.get('x-request-id') or exc.headers.get('request-id'),**evidence)
                 if binary and exc.code in (301, 302, 303, 307, 308):
                     from urllib.parse import urljoin
                     target = urljoin(url, exc.headers.get('Location', ''))
@@ -120,8 +145,10 @@ class Provider:
                 error = SubmissionRejected if exc.code in (400, 401, 403, 404, 405, 413, 422, 429) else ValueError
                 raise error(f'图片服务 HTTP {exc.code}，请检查额度、凭据或稍后继续任务') from None
             except (URLError, TimeoutError, OSError):
+                self.audit(event='connection_error',**evidence)
                 raise ValueError('图片服务连接中断；已记录的远程任务可继续查询') from None
             except (json.JSONDecodeError, UnicodeError):
+                self.audit(event='invalid_json',**evidence)
                 raise ValueError('图片服务未返回有效 JSON') from None
         raise ValueError('图片下载重定向次数过多')
 
@@ -143,10 +170,12 @@ class Provider:
 
 
 def generate_materials(folder, spec, progress):
-    provider = Provider()
+    provider = Provider(folder/'http.jsonl')
     receipt = read(folder/'generation.json', {})
     prompt_set = prompts(spec['description'])
-    for role in ('ground', 'road'):
+    if spec.get('asset_type')=='material':
+        prompt_set['ground']=prompt_set['ground'].replace(' (grass by default)','')
+    for role in (('ground',) if spec.get('asset_type')=='material' else ('ground','road')):
         target = folder/'inputs'/f'{role}.png'
         record = receipt.setdefault(role, {'prompt': prompt_set[role], 'model': 'gpt-image-2',
                                           'base_url': provider.base})
@@ -208,7 +237,8 @@ def generate_materials(folder, spec, progress):
             if status == 'failed':
                 record['remote_status'] = 'failed'
                 atomic(folder/'generation.json', receipt)
-                raise ValueError('服务商图片生成失败；继续任务会重新生成失败的材质，可能产生费用；已成功材质将复用')
+                raise ValueError('图片接口返回任务失败（'+record['remote_id']+'）；尚不能确认请求是否到达生图服务。'
+                                 '请求记录见任务目录 http.jsonl。继续任务会重新提交失败的材质，可能产生费用；已成功材质将复用')
             if status not in ('pending', 'queued', 'running', 'processing'):
                 raise ValueError('图片服务返回未知任务状态，请检查服务商后台')
             time.sleep(3)

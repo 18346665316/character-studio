@@ -480,6 +480,28 @@ def handler(panel):
                     result.update(token=panel.token, image_api_configured=configured(panel.root),
                                   image_base_url=load_config(panel.root).get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE))
                     return self.respond(result)
+                if parsed.path == '/api/terrain/job-log':
+                    from terrain_images import load_config
+                    identity=name(query.get('id',[''])[0])
+                    path=panel.scoped('.local/terrain/jobs/'+identity+'/http.jsonl','.local/terrain/jobs/'+identity)
+                    if not (path.parent/'job.json').is_file(): raise ValueError('任务不存在')
+                    events=[]
+                    config=load_config(panel.root)
+                    # Only structured transport fields are exposed, never worker output or payloads.
+                    if path.is_file():
+                        with path.open('rb') as source:
+                            source.seek(max(0,path.stat().st_size-128*1024))
+                            for line in source.read().splitlines()[-200:]:
+                                try: item=json.loads(line)
+                                except (ValueError,UnicodeError): continue
+                                item={k:item[k] for k in ('event','method','endpoint','payload_bytes','content_type','time_utc','http_status','request_id','response') if k in item}
+                                if isinstance(item.get('response'),dict):
+                                    item['response']={k:v for k,v in item['response'].items() if k in ('id','status','operation','model','error')}
+                                raw=json.dumps(item,ensure_ascii=False)
+                                for key in ('OPENAI_API_KEY','STUDIO_IMAGE_API_KEY'):
+                                    if config.get(key): raw=raw.replace(config[key],'[REDACTED]')
+                                events.append(json.loads(raw))
+                    return self.respond({'id':identity,'events':events})
                 if parsed.path.startswith('/terrain-asset/'):
                     relative = unquote(parsed.path[len('/terrain-asset/'):])
                     parts = relative.split('/')
@@ -566,7 +588,8 @@ def handler(panel):
                     if route == '/api/terrain/transition':
                         from terrain_transition import build
                         folder=build(panel.root,data.get('base_kit'),data.get('overlay_kit'),
-                                     data.get('tile_size',64),data.get('title'),interactive=False)
+                                     data.get('tile_size',64),data.get('title'),interactive=False,
+                                     mode=data.get('transition_mode','surface'))
                         result=read(folder/'manifest.json')
                     elif route == '/api/terrain/generate':
                         result = panel.start_terrain(data)

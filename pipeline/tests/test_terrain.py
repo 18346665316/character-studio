@@ -211,5 +211,16 @@ class TerrainTests(unittest.TestCase):
             with self.assertRaises(SubmissionRejected): generate_materials(folder,self.spec,lambda _:None)
             self.assertNotIn('submission_uncertain',read(folder/'generation.json')['ground'])
 
+    def test_single_ai_material_makes_only_one_image_call(self):
+        folder=self.ai_folder();blob=base64.b64decode(encoded(self.random_image()))
+        with patch('terrain_images.Provider') as provider:
+            client=provider.return_value;client.base='https://example.com/v1'
+            client.create.return_value={'id':'water-task'}
+            client.request.side_effect=[{'status':'completed'},blob]
+            generate_materials(folder,{**self.spec,'asset_type':'material'},lambda _:None)
+            self.assertEqual(client.create.call_count,1)
+            self.assertTrue((folder/'inputs/ground.png').is_file())
+            self.assertFalse((folder/'inputs/road.png').exists())
+
 
 if __name__ == '__main__': unittest.main()

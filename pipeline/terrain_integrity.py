@@ -19,7 +19,8 @@ def inspect(root, subtree, identity):
         if not isinstance(manifest,dict): raise ValueError('清单缺失或损坏')
         required={'preview.png','atlas.png','INTEGRATION.md'}
         if subtree=='terrain-kits':
-            required.update({'ground_material.png','road_material.png',manifest['ground']})
+            required.update({'ground_material.png',manifest['ground']})
+            if manifest.get('asset_type')!='material': required.add('road_material.png')
             groups=manifest.get('variants') or [{'tiles':manifest['tiles'],'ground':manifest['ground']}]
             for group in groups:
                 required.add(group['ground'])

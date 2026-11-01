@@ -42,6 +42,19 @@ class TerrainHTTPTests(unittest.TestCase):
         self.assertEqual(caught.exception.code,403)
         self.assertFalse((self.root/'.local/terrain').exists())
 
+    def test_job_log_whitelists_fields_and_rejects_outside_paths(self):
+        from unittest.mock import patch
+        job=prepare(self.root,dict(title='test',description='test',mode='demo'))
+        folder=self.root/'.local/terrain/jobs'/job['id']
+        (folder/'http.jsonl').write_text(json.dumps({'event':'response','http_status':200,
+            'Authorization':'secret','response':{'id':'remote','error':'secret','data':'private-image'}})+'\n')
+        with patch('terrain_images.load_config',return_value={'OPENAI_API_KEY':'secret'}):
+            with urlopen(self.base+'/api/terrain/job-log?id='+job['id']) as response: result=json.load(response)
+        self.assertEqual(result['events'][0]['response']['error'],'[REDACTED]')
+        self.assertNotIn('Authorization',result['events'][0])
+        self.assertNotIn('data',result['events'][0]['response'])
+        with self.assertRaises(HTTPError): urlopen(self.base+'/api/terrain/job-log?id=..%2F.env')
+
     def test_export_and_preview_are_public_but_internal_files_cannot_be_read(self):
         job=prepare(self.root,dict(title='测试',description='草地',mode='demo'))
         execute(self.root,job['id'])
@@ -76,6 +89,21 @@ class TerrainHTTPTests(unittest.TestCase):
                 self.assertIn('INTEGRATION.md',archive.namelist())
         with urlopen(self.base+'/api/terrain/state') as response:
             self.assertEqual(json.load(response)['transitions'][0]['id'],kit['id'])
+        params['transition_mode']='shoreline'
+        with urlopen(Request(url,data=json.dumps(params).encode(),headers=headers)) as response:
+            water=json.load(response)
+        self.assertEqual(water['transition_mode'],'shoreline')
+        self.assertTrue(water['validation']['passed'])
+        with urlopen(self.base+'/transition-asset/'+water['id']+'/kit.zip') as response:
+            with zipfile.ZipFile(BytesIO(response.read())) as archive:
+                for tile in water['tiles']:
+                    self.assertIn(tile['water_mask'],archive.namelist())
+                self.assertIn('静态水岸',archive.read('INTEGRATION.md').decode())
+        params['transition_mode']='unknown'
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(Request(url,data=json.dumps(params).encode(),headers=headers))
+        self.assertEqual(caught.exception.code,400)
+        params['transition_mode']='surface'
         for resource in ['inputs/grass.png','manifest.json','../.env']:
             with self.assertRaises(HTTPError):
                 urlopen(self.base+'/transition-asset/'+kit['id']+'/'+resource)
