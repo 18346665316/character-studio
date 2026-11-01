@@ -34,6 +34,9 @@ class TerrainHTTPTests(unittest.TestCase):
         self.assertNotIn('api_key',data)
         with urlopen(self.base+'/terrain.html') as response:
             self.assertIn('kit-form',response.read().decode())
+        for page in ('water.html','water-shore.html'):
+            with urlopen(self.base+'/'+page) as response:
+                self.assertIn('data-asset-area="water"',response.read().decode())
 
     def test_generation_requires_token_before_creating_any_job(self):
         request=Request(self.base+'/api/terrain/generate',data=b'{"mode":"demo"}',

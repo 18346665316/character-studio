@@ -178,6 +178,8 @@ def build(root,grass_kit,sand_kit,size=64,title='草地与沙地共存实验',in
         atomic(folder/'manifest.json',{'schema':'studio.terrain-transition/0.1','id':identity,
             'title':title.strip(),'tile_size':size,'sources':sources,'ai_calls':0,
             'transition_mode':mode,
+            'asset_family':'water' if mode=='shoreline' else 'surface',
+            'asset_role':'shoreline_kit' if mode=='shoreline' else 'surface_transition',
             'corners':{'northwest':1,'northeast':2,'southeast':4,'southwest':8},
             'material_bits':{'0':'base','1':'overlay'},'diagonal_policy':'overlay_connected',
             'variants':count,'source_policy':'delivered_ground_exact','tiles':entries,'example_vertices':vertices,'validation':report,

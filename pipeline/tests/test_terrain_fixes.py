@@ -156,6 +156,10 @@ class TerrainReviewFixes(unittest.TestCase):
         folder=self.root/'terrain-kits'/job['id']
         manifest=read(folder/'manifest.json')
         self.assertEqual(manifest['asset_type'],'material')
+        self.assertEqual(manifest['asset_family'],'water')
+        self.assertEqual(manifest['asset_role'],'water_surface')
+        self.assertFalse(manifest['water']['animated'])
+        self.assertFalse(manifest['water']['depth'])
         self.assertEqual(len(manifest['variants']),4)
         self.assertEqual(manifest['tiles'],[])
         self.assertFalse((folder/'inputs/road.png').exists())
@@ -164,6 +168,7 @@ class TerrainReviewFixes(unittest.TestCase):
         with zipfile.ZipFile(folder/'kit.zip') as archive:
             self.assertFalse(any('road' in entry for entry in archive.namelist()))
         dest=build(self.root,source.name,folder.name,interactive=False,mode='shoreline')
+        self.assertEqual(read(dest/'manifest.json')['asset_role'],'shoreline_kit')
         self.assertTrue(inspect(self.root,'terrain-transitions',dest.name)['passed'])
         repeat=prepare(self.root,{**spec,'mode':'reuse','source_kit':folder.name})
         execute(self.root,repeat['id'])

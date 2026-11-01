@@ -228,11 +228,17 @@ def compile_material(folder,spec,identity):
     if worst: raise ValueError('材质边缘检查失败')
     atlas.save(folder/'atlas.png');preview.save(folder/'preview.png');images[0].save(folder/'ground_material.png')
     manifest={'schema':'studio.terrain-kit/1.1','id':identity or folder.name,**spec,
+        'asset_family':'water' if spec.get('material_kind')=='water' else 'surface',
+        'asset_role':'water_surface' if spec.get('material_kind')=='water' else 'surface_material',
+        'created_at':datetime.now(timezone.utc).isoformat(),
         'source_sha256':{p.name:digest(p) for p in (folder/'inputs').glob('*.png')},
         'ground':variants[0]['ground'],'ground_cell':[0,0],'variants':variants,'tiles':[],
         'variant_rule':'coordinate_hash_v1','variant_seed':17,'atlas':'atlas.png',
         'validation':{'passed':True,'matching_edge_pairs':pairs,'max_channel_difference':0},
         'art_review':'pending','limitations':['变化块共用边缘，仍需复核纹理重复和风格；不包含道路或动画。']}
+    if spec.get('material_kind')=='water':
+        manifest['water']={'animated':False,'coverage':'full_tile','depth':False,
+                           'shore_distance':False,'collision':False}
     (folder/'INTEGRATION.md').write_text('# 独立材质素材\n\n按 manifest.json 的 variants[].ground 或 ground_cell 读取变化块。所有变化块可相邻使用。'
         '可作为地表过渡或静态水岸的来源。没有道路块、动画、碰撞或深度数据。边缘检查不代表美术验收。\n',encoding='utf-8')
     manifest['files_sha256']={str(p.relative_to(folder)):digest(p) for p in folder.rglob('*') if p.is_file() and p.name not in ('manifest.json','kit.zip')}
@@ -309,6 +315,7 @@ def compile_kit(folder, spec, identity=None):
         raise ValueError('道路连接边缘检查失败，未发布套件')
     sources = {p.name: digest(p) for p in sorted((folder/'inputs').glob('*.png'))}
     manifest = {'schema': 'studio.terrain-kit/1.1', 'id': identity or folder.name, **spec,
+                'asset_family':'road','asset_role':'road_kit',
                 'created_at': datetime.now(timezone.utc).isoformat(),
                 'source_sha256': sources, 'atlas': 'atlas.png', 'ground': 'tiles/ground.png',
                 'ground_cell': variant_entries[0]['ground_cell'],

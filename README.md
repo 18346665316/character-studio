@@ -38,6 +38,16 @@ STUDIO_IMAGE_BASE_URL=https://api.kbsfdxc.net/v1
 
 ## 目录边界
 
+资产类别、共用生产能力及静态水体交付规范见 [资产生产规范](docs/asset-production.md)。水体独立入口为 `/water.html`，水面确认后进入 `/water-shore.html` 制作水岸；普通地表过渡不再混入水岸生产选项。既有 API 与素材版本保持兼容。
+
+### Godot 地表素材接入验收
+
+使用项目 Python 执行 `pipeline/validate_terrain_godot.py --road-kit <道路套件ID> --material-kit <独立水面材质ID> --water-kit <水岸套件ID> --check --open`。水岸的两个来源须分别对应所选道路套件的草地与独立水面材质。默认使用本机 `/Applications/Godot.app/Contents/MacOS/Godot`（已在4.6.2验证），其他位置可用 `--godot` 指定。
+
+该命令检查交付完整性后，从三份 ZIP 提取接入所需素材，在 `.local/terrain-godot-validation/<时间>/` 建立独立工程，不改变源素材。Godot 使用实际导入的 atlas 创建 TileSetAtlasSource 与 TileMapLayer，按道路出口位和水岸共享角点规则重现样例；四个页签分别查看道路、独立水面、水岸及覆盖遮罩。`--check` 使用真实渲染，需有图形环境；验收导入像素、无 mipmap、图集坐标、全部合法跨组边缘、水面遮罩四角及实际渲染结果，截图逐像素对比导出的固定预览。报告与四张实机截图在 `qa/`，执行日志在 `import.log` 和 `run.log`，来源 ZIP 指纹在 `source.json`。
+
+独立工程可复制后重新打开 `project.godot`。当前按清单显式选块，不配置 Godot 的自动地形笔刷，不包含地图编辑、碰撞、导航或水面动画；像素与连接验收不代表美术验收。仅打开工程时报告的 `rendered_check` 为 false，实际渲染对比需要运行时附加 `-- --qa` 或使用上述 `--check`。
+
 地面与道路页的「产出类型」可选择独立材质：输入一张材质图片，或使用参考图与文字进行一次 AI 生成；可标记为通用、草地、沙地、水面或石质。独立材质只输出地表变化块、图集、固定平铺验收图、原始输入与接入说明，不要求道路图片，也不生成道路资源。来源记录与完整性检查沿用套件格式，可直接作为地表过渡和静态水岸的任一来源；「用当前材质重新制作」保留来源类型和分类，不调用 AI。
 
 「生产记录 → 查看请求日志」可查看本任务的脱敏 HTTP 请求与响应，包括时间、接口、HTTP 状态、远程任务 ID 和请求追踪编号；不展示请求正文、图片数据或授权头。每次最多显示最近200条、128KB范围内的记录，导入及旧任务可能没有 HTTP 记录。任务目录的 `http.jsonl` 保存请求记录，`generation.json` 保存生成来源与远程编号；这两者不能证明中转已经成功转发到上游。远程 `failed` 后停止轮询，继续任务会重新提交失败项。

@@ -466,7 +466,7 @@ def handler(panel):
             try:
                 if parsed.path in ('/','/app.js','/sequence.js','/workspace.js','/style.css',
                                    '/terrain.html','/terrain.js','/terrain.css',
-                                   '/transition.html','/transition.js'):
+                                   '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/terrain/state':
