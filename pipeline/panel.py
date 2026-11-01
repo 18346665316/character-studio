@@ -20,9 +20,9 @@ from task_lock import acquire, serialized, TaskBusyError
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
-ACTIONS = {'import_model','optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact'}
+ACTIONS = {'import_model','optimize', 'adopt_model', 'reconstruct', 'prepare', 'rig', 'download', 'review', 'bake', 'equipment', 'weapon', 'sequence', 'compact', 'palette'}
 LABELS = {'reconstruct': '原画重建与贴图', 'prepare': '贴图准备', 'rig': 'Mixamo 人工绑定',
-          'import_model':'导入外部模型','optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简'}
+          'import_model':'导入外部模型','optimize':'模型减面对比', 'adopt_model':'采用优化模型', 'download': '动作下载', 'review': '动作检查画面', 'bake': '图集与 GIF 输出', 'equipment': '武器握持标注', 'weapon':'独立武器重建', 'sequence':'编排统一渲染', 'compact':'图集精简','palette':'颜色简化'}
 
 
 def now():
@@ -138,6 +138,10 @@ class Panel(AssetRepository):
             if params.get('plan') and params['plan']!=plan:
                 raise ValueError('编排来源或武器设置已变化，请新建预览任务')
             clean={'recipe':plan['recipe'],'plan':plan}
+        if action == 'palette':
+            from palette_delivery import plan
+            clean=plan(self.root,character,params)
+            if params.get('manifest_sha256') and clean!=params: raise ValueError('颜色处理来源已变化，请新建任务')
         if action == 'compact':
             from compact_delivery import plan
             clean=plan(self.root,character,params.get('delivery'),params.get('clips'),params.get('profile','balanced'))
@@ -189,6 +193,8 @@ class Panel(AssetRepository):
             if len(set(keys)) != len(keys):
                 raise ValueError('动作名重复')
             clean['actions'] = actions
+            from action_presets import validate_metadata
+            clean.update(validate_metadata(actions,params))
         if action in ('review', 'bake', 'equipment'):
             batch = name(params.get('batch'))
             match = next((b for b in c['batches'] if b['id'] == batch), None)
@@ -358,13 +364,13 @@ class Panel(AssetRepository):
         if manifest.get('source',{}).get('character') != character:
             raise ValueError('交付目录无有效清单')
         if variant is not None:
-            if variant not in ('game','source'): raise ValueError('未知导出版本')
+            if variant not in ('game','source','comparison'): raise ValueError('未知导出版本')
             name(clip)
             info=manifest.get(clip+'_spritesheet.png')
-            if not info or (variant=='game' and not info.get('game')): raise ValueError('版本不存在')
-            folder=directory/'game' if variant=='game' else directory
+            if not info or (variant=='game' and not info.get('game')) or (variant=='comparison' and not info.get('color_comparison')): raise ValueError('版本不存在')
+            folder=directory/variant if variant in ('game','comparison') else directory
             names=[clip+'_spritesheet.png',clip+'_preview.gif',clip+'_render.json']
-            if variant=='game': names.append(clip+'.tres')
+            if variant in ('game','comparison'): names.append(clip+'.tres')
             buffer=BytesIO()
             with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
                 for filename in names:
@@ -422,8 +428,11 @@ def handler(panel):
                 if parsed.path == '/api/state':
                     with panel.mutex:
                         panel.recover_jobs()
-                        result = {'api_version':19,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        from action_presets import PRESETS
+                        result = {'action_presets':PRESETS,'api_version':22,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
+                        from palette_delivery import catalog as palette_catalog
+                        result['palettes']=palette_catalog(panel.root)
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
                             result['selected'] = panel.character(query['character'][0])
@@ -445,6 +454,12 @@ def handler(panel):
                 if parsed.path.startswith('/asset/'):
                     path = panel.asset_path(unquote(parsed.path[len('/asset/'):]))
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path == '/api/game-package':
+                    from game_package import build
+                    choices=query.get('selections',['{}'])[0]
+                    if len(choices)>4096: raise ValueError('动作选择过长')
+                    content=build(panel.root,query.get('character',[''])[0],json.loads(choices),query.get('variant',['game'])[0],report_only=query.get('inspect')==['1'])
+                    return self.respond(content) if isinstance(content,dict) else self.respond(content,'application/zip')
                 if parsed.path == '/api/export':
                     content = panel.export(query.get('character',[''])[0],query.get('delivery',[''])[0],query.get('clip',[None])[0],query.get('variant',[None])[0])
                     return self.respond(content,'application/zip')

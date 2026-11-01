@@ -1,7 +1,7 @@
 'use strict';
 // Task-oriented presentation. Rendering, validation and durable jobs stay in the pipeline.
 let libraryOpen=true,activePage='character';
-const pageLabels={character:'人物',actions:'动作',equipment:'装备',sheets:'图集',sequence:'编排'};
+const pageLabels={character:'人物',actions:'动作',equipment:'装备',sheets:'交付',sequence:'编排'};
 const pageDescriptions={character:'确认人物外观与骨骼，建立可复用的角色。',actions:'管理 Mixamo 原动作，检查姿态与变形。',equipment:'管理武器模型，设置人物握持与动作中的持用状态。',sheets:'生成、检查、精简和下载游戏图集。',sequence:'组织原动作，生成统一取景的连续预览。'};
 function pageFor(value){return ({model:'character',rig:'character',animation:'actions',equipment:'equipment',weapon:'equipment',sheet:'sheets',quality:'sheets',sequence:'sequence',actions:'actions',sheets:'sheets',weapons:'equipment'})[value.type]||'character';}
 function goPage(page){
@@ -42,11 +42,11 @@ function renderWorkspace(force=false){
  renderSetup(c);renderTasks();if(!force&&viewKey===signature)return;
  // Keep focused form controls intact during background polling.
  if(!force&&$('controls').contains(document.activeElement)&&['INPUT','SELECT'].includes(document.activeElement?.tagName))return;
- viewKey=signature;stopPlayback();$('page-library').replaceChildren();$('page-tabs').replaceChildren();$('preview-content').replaceChildren();$('controls').replaceChildren();$('preview-meta').textContent='';$('viewport-note').textContent='';$('detail-layout').hidden=true;
+ viewKey=signature;stopPlayback();$('delivery-action-list')?.remove();$('detail-layout').classList.remove('delivery-layout');$('page-library').replaceChildren();$('page-tabs').replaceChildren();$('preview-content').replaceChildren();$('controls').replaceChildren();$('preview-meta').textContent='';$('viewport-note').textContent='';$('detail-layout').hidden=true;
  if(activePage==='character'){detail();tab('模型与外观',()=>choose({type:'model'}),selection.type!=='rig');tab('骨骼绑定',()=>choose({type:'rig'}),selection.type==='rig');if(selection.type==='rig')renderRig(c);else renderModel(c);}
  else if(activePage==='actions'){if(selection.type==='animation'){detail();tab('← 动作库',()=>goPage('actions'),false);renderAnimation(c);}else renderActionLibrary(c);}
  else if(activePage==='equipment')renderEquipmentWorkspace(c);
- else if(activePage==='sheets'){tab('全部图集',()=>goPage('sheets'),selection.type==='sheets');tab('质量与异常',()=>choose({type:'quality'}),selection.type==='quality');if(selection.type==='quality'){detail();renderQuality(c);}else if(selection.type==='sheet'){detail();renderSheet(c);}else renderSheetLibrary(c);}
+ else if(activePage==='sheets'){if(selection.type==='quality')tab('← 返回交付',()=>goPage('sheets')); if(selection.type==='quality'){detail();renderQuality(c);}else if(selection.type==='sheet'){detail();renderSheet(c);}else renderSheetLibrary(c);}
  else{detail();renderSequence(c);}
 }
 function renderActionLibrary(c){
@@ -54,7 +54,7 @@ function renderActionLibrary(c){
  root.append(sectionHeading('动作库',`${rows.length} 个动作 · 原动作与生成的图集分别管理。`,button('＋ 添加 Mixamo 动作',openAdd,'primary',blocked()||!c.rig.ready)));
  const search=node('input');search.type='search';search.placeholder='搜索动作标题';search.value=query;search.setAttribute('aria-label','搜索动作');const grid=node('div',undefined,'asset-grid');
  const paint=()=>{grid.replaceChildren();for(const a of rows.filter(a=>animationTitle(a.batch,a.file).toLowerCase().includes(search.value.toLowerCase()))){const card=node('article',undefined,'asset-card'),approved=animationApproved(c,a.batch,a.file),review=reviewFor(c,a.batch),pose=review?.images.find(i=>i.name.startsWith(a.key+'_'));const art=node('button',undefined,'asset-art');art.type='button';art.setAttribute('aria-label','检查动作 '+animationTitle(a.batch,a.file));if(pose){const img=node('img');img.src=pose.url;img.alt=animationTitle(a.batch,a.file)+'姿态检查';img.loading='lazy';art.append(img);}else art.append(node('span','▷','asset-symbol'));art.onclick=()=>choose({type:'animation',key:a.key,version:a.id});
- const body=node('div',undefined,'asset-copy');body.append(tag(!a.batch.current_rig?'历史绑定':approved?'已确认':'待检查',approved?'good':'warning'),node('h3',animationTitle(a.batch,a.file)),node('p',`来源 ${sourceTime(a.batch.id)}${a.versions.length>1?' · '+a.versions.length+' 个来源版本':''}`,'muted'));const actions=node('div',undefined,'card-actions');actions.append(button('检查动作',art.onclick),button('生成图集',()=>openExport(a.batch.id,[a.file]),'primary',blocked()||!a.batch.current_rig||!approved));body.append(actions);card.append(art,body);grid.append(card);}if(!grid.childElementCount)grid.append(placeholder('没有匹配的动作','尝试其他标题，或添加 Mixamo 原动作。'));};
+ const body=node('div',undefined,'asset-copy');body.append(tag(!a.batch.current_rig?'历史绑定':approved?'已确认':'待检查',approved?'good':'warning'),node('h3',animationTitle(a.batch,a.file)),...(a.batch.action_roles?.[a.file]?[tag(ROLE_LABELS[a.batch.action_roles[a.file]]||a.batch.action_roles[a.file])]:[]),node('p',`来源 ${sourceTime(a.batch.id)}${a.versions.length>1?' · '+a.versions.length+' 个来源版本':''}`,'muted'));const actions=node('div',undefined,'card-actions');actions.append(button('检查动作',art.onclick),button('生成图集',()=>openExport(a.batch.id,[a.file]),'primary',blocked()||!a.batch.current_rig||!approved));body.append(actions);card.append(art,body);grid.append(card);}if(!grid.childElementCount)grid.append(placeholder('没有匹配的动作','尝试其他标题，或添加 Mixamo 原动作。'));};
  search.oninput=()=>{prefs().actionQuery=search.value;remember();paint();};root.append(search,grid);paint();
  if(!rows.length)root.append(note('先完成人物绑定，再到 Mixamo 选择表演并填写完整英文标题。'));
  const batches=c.batches.filter(b=>b.current_rig);if(batches.length)root.append(sectionHeading('批量生成','在生成配置中勾选同次导入的动作，共享镜头与人物比例。',button('选择多个动作生成',()=>openExport(batches[0].id),'full',blocked())));
@@ -80,7 +80,7 @@ function renderEquipmentWorkspace(c){
  if(!selection.equipment&&!selection.create&&c.equipment.length)selection.equipment=c.equipment[0].id;
  detail();renderEquipment(c);
 }
-function deliveryTitle(d){return `${d.operation?.type==='compact'?'精简结果':'渲染结果'} · ${rendererName(d.renderer)} · ${sourceTime(d.id)}`;}
+function deliveryTitle(d){return `${d.operation?.type==='palette'?'颜色简化':d.operation?.type==='compact'?'精简结果':'渲染结果'} · ${rendererName(d.renderer)} · ${sourceTime(d.id)}`;}
 function sheetGroups(c){
  const groups=new Map();
  for(const delivery of c.deliveries.filter(d=>d.kind!=='sequence'))for(const item of delivery.clips){
@@ -96,35 +96,58 @@ function sheetVersionRow(delivery,item,latest=false){
  row.onclick=()=>choose({type:'sheet',delivery:delivery.id,clip:item.name});return row;
 }
 function renderSheetLibrary(c){
- const root=$('page-library'),groups=sheetGroups(c);
- root.append(sectionHeading('动作图集',`${groups.length} 个动作 · 同一动作的渲染与精简版本集中查看。`,button('生成新图集',()=>openExport(),'primary',blocked()||!c.batches.some(b=>b.current_rig))));
- if(!groups.length){root.append(placeholder('还没有游戏图集','先在动作页检查并确认原动作，然后生成。'));return;}
- for(const group of groups){const record=node('section',undefined,'delivery-record');record.append(sectionHeading(group.title,`${group.versions.length} 个版本`));
-  const [latest,...history]=group.versions;record.append(sheetVersionRow(latest.delivery,latest.item,true));
-  if(history.length)record.append(details(`其他版本（${history.length}）`,...history.map(v=>sheetVersionRow(v.delivery,v.item))));
-  root.append(record);
- }
+ const groups=sheetGroups(c);
+ if(!groups.length){const root=$('page-library');root.append(sectionHeading('交付','从已确认动作生成第一套成果。',button('生成成果',()=>openExport(),'primary',blocked()||!c.batches.some(b=>b.current_rig))));root.append(placeholder('还没有交付成果','先在动作页完成检查，再生成图集。'));return;}
+ const group=groups.find(g=>g.key===prefs().deliveryClip)||groups[0],preferred=prefs().deliveryVersions?.[group.key],version=group.versions.find(v=>v.delivery.id===preferred)||group.versions[0];
+ selection={type:'sheet',delivery:version.delivery.id,clip:version.item.name};detail();renderSheet(c);
 }
+function deliveryRaw(c,delivery){let current=delivery;const seen=new Set();while(current?.operation?.source_delivery&&!seen.has(current.id)){seen.add(current.id);const parent=c.deliveries.find(d=>d.id===current.operation.source_delivery);if(!parent)break;current=parent;}return current;}
+function selectDelivery(delivery,clip){prefs().deliveryClip=clip;prefs().deliveryVersions={...(prefs().deliveryVersions||{}),[clip]:delivery};remember();choose({type:'sheet',delivery,clip});}
 function viewName(view){return ({front:'正面',side:'侧面',three_quarter:'四分之三'})[view]||view||'未记录视角';}
 function renderSheet(c){
  const d=c.deliveries.find(d=>d.id===selection.delivery),item=d?.clips.find(i=>i.name===selection.clip);if(!item){goPage('sheets');return;}
- const controls=$('controls'),content=$('preview-content'),title=animationTitle(c.batches.find(b=>b.id===d.batch)||{},item.name+'.fbx');setTitles('RENDERED ASSET',title,'结果与下载');
- const toolbar=node('div',undefined,'tabs');toolbar.append(button('← 返回图集记录',()=>goPage('sheets')));if(item.game)for(const [value,label]of [['game','游戏精简版'],['source','完整采样版']])toolbar.append(button(label,()=>{selection.previewResume=player?{position:player.position,playing:player.playing}:null;prefs().frameVariant=value;remember();renderWorkspace(true);},(prefs().frameVariant||'game')===value?'selected':''));content.append(toolbar);
- const chosen=item.game&&prefs().frameVariant!=='source'?gameItem(item):item;mountPlayer(chosen,selection.previewResume);delete selection.previewResume;
- if(item.info.body_height_px)controls.append(field('预览倍率',select([[1,'1× 实际像素'],[2,'2×'],[3,'3×']],prefs().spriteZoom||1,v=>{prefs().spriteZoom=Number(v);remember();renderWorkspace(true);})));
- const profile=prefs().compactProfile||'balanced';
- controls.append(node('h3','精简动作'),note('默认推荐即可。只减少画面帧数，动作时长不变；原版始终保留。'),field('精简程度',select([['balanced','推荐'],['smooth','更多细节'],['compact','更少帧']],profile,v=>{prefs().compactProfile=v;remember();})),button('生成精简版',()=>{selection.clip=item.name;prefs().frameVariant='game';remember();start('compact',{delivery:d.id,clips:[item.name],profile:prefs().compactProfile||'balanced'});},'primary full',blocked()||!readyServer()));
- if(d.clips.length>1)controls.append(button(`对这 ${d.clips.length} 个动作全部应用`,()=>start('compact',{delivery:d.id,clips:d.clips.map(i=>i.name),profile:prefs().compactProfile||'balanced'}),'full',blocked()||!readyServer()));
- if(item.game){const compression=item.game.info.compression,sourceBytes=compression?.source_bytes,outputBytes=compression?.output_bytes;controls.append(note(`${item.info.frame_count} → ${item.game.info.frame_count} 帧 · 时长保持 ${Number(item.info.duration_seconds).toFixed(2)} 秒${sourceBytes&&outputBytes?' · PNG '+(sourceBytes/1024).toFixed(1)+' → '+(outputBytes/1024).toFixed(1)+' KB':''}`),note('切换上方完整／精简版本，在相同时间位置对比。跳跃、攻击请重点检查起跳、落地和发力瞬间。'));}
+ const controls=$('controls'),content=$('preview-content'),title=animationTitle(c.batches.find(b=>b.id===d.batch)||{},item.name+'.fbx');setTitles('DELIVERY',title,'输出方案');
+ prefs().deliveryClip=item.name;
+ const list=node('aside',undefined,'delivery-action-list');list.id='delivery-action-list';list.append(node('h3','动作成果'));
+ for(const group of sheetGroups(c)){const preferred=prefs().deliveryVersions?.[group.key],entry=group.key===item.name?{delivery:d,item}:group.versions.find(v=>v.delivery.id===preferred)||group.versions[0];const row=button('',()=>selectDelivery(entry.delivery.id,entry.item.name),'delivery-action'+(group.key===item.name?' selected':''));row.setAttribute('aria-label','预览 '+group.title);const img=node('img');img.src=entry.item.game?.gif||entry.item.gif;img.alt='';const copy=node('span');copy.append(node('strong',group.title),node('small',`${entry.item.game?.info.frame_count||entry.item.info.frame_count} 帧 · ${entry.item.info.quality?.status==='review'?'需复核':'可预览'}`));row.append(img,copy);list.append(row);}
+ list.append(button('＋ 生成其他动作',()=>openExport(),'full',blocked()));$('detail-layout').classList.add('delivery-layout');$('detail-layout').prepend(list);
+ const raw=deliveryRaw(c,d),rawItem=raw?.clips.find(i=>i.name===item.name),resume=selection.previewResume;
+ const toolbar=node('div',undefined,'delivery-preview-tools');
+ if(item.game)toolbar.append(select([['game','精简成果'],['source','完整采样']],prefs().frameVariant||'game',value=>{selection.previewResume=player?{position:player.position,playing:player.playing}:null;prefs().frameVariant=value;remember();renderWorkspace(true);}));
+ toolbar.append(select([[1,'1× 实际像素'],[2,'2×'],[3,'3×']],prefs().spriteZoom||1,value=>{selection.previewResume=player?{position:player.position,playing:player.playing}:null;prefs().spriteZoom=Number(value);remember();renderWorkspace(true);}));
+ if(d.color_processing&&rawItem)toolbar.append(button(selection.compareRaw?'查看处理成果':'对照原色',()=>{selection.previewResume=player?{position:player.position,playing:player.playing}:null;selection.compareRaw=!selection.compareRaw;renderWorkspace(true);},selection.compareRaw?'selected':''));
+ content.append(toolbar);
+ const comparisonGame=item.comparison||(item.game?.info.source_frame_indices?{...item.game,sheet:rawItem?.sheet,info:{...item.game.info,preview_source_indices:item.game.info.source_frame_indices}}:null);const alignedRaw=rawItem&&comparisonGame?{...rawItem,game:comparisonGame}:rawItem;const baseItem=selection.compareRaw&&alignedRaw?alignedRaw:item,chosen=baseItem.game&&prefs().frameVariant!=='source'?gameItem(baseItem):baseItem;mountPlayer(chosen,resume);delete selection.previewResume;
+ const quality=item.info.quality;
+ if(d.heading_stale)content.append(node('div','此成果的朝向设置已过期，请重新渲染。','callout'));
+ if(quality?.status==='review')content.append(node('div','存在需复核画面，请查看右侧质量详情。','callout'));
+ const compression=item.game?.info.compression;content.append(node('div',`${selection.compareRaw?'正在对照原色 · ':''}${item.info.frame_count} → ${item.game?.info.frame_count||item.info.frame_count} 帧 · ${Number(item.info.duration_seconds).toFixed(2)} 秒${compression?.output_bytes?' · '+(compression.output_bytes/1024).toFixed(1)+' KB':''}`,'delivery-result-summary'));
+ controls.append(node('div',`${item.info.body_height_px||'?'}px · ${viewName(item.info.view)} · ${d.equipment?.config?.weapon_name||(d.equipment?'已装备':'空手')}`,'delivery-recipe-summary'));
+ const colorOptions=[['original','保留原色'],['new:32','简化为 32 色'],['new:64','简化为 64 色'],['new:128','简化为 128 色']];
+ const appliedPalette=d.color_processing?.palette_id,appliedColors=d.color_processing?.colors;
+ let color=appliedPalette||'original',profile=item.game?.info.compression?.profile||'balanced';if(!['balanced','smooth','compact'].includes(profile))profile='balanced';
+ const basicValue=appliedColors?'new:'+appliedColors:'original';
+ const currentColor=color,currentProfile=profile;
+ const apply=button('成果已就绪',async()=>{
+  prefs().frameVariant='game';remember();
+  if(color!==currentColor){if(!rawItem){notify('找不到原色来源，请选择原色记录。',true);return;}
+   if(color==='original')await start('palette',{delivery:raw.id,clips:[item.name],colors:0,profile,timing_delivery:d.id,preserve_timing:profile===currentProfile});
+   else await start('palette',{delivery:raw.id,clips:[item.name],profile,timing_delivery:d.id,preserve_timing:profile===currentProfile,...(color.startsWith('new:')?{colors:Number(color.split(':')[1])}:{palette_id:color})});
+  }else await start('compact',{delivery:d.id,clips:[item.name],profile});
+ },'primary full',true);
+ apply.hidden=true;const update=()=>{const changed=color!==currentColor||profile!==currentProfile;apply.hidden=!changed;apply.textContent=changed?'更新当前动作':'成果已就绪';apply.disabled=!changed||blocked()||!readyServer();download.style.display=changed?'none':'';};
+ const basicColor=select(colorOptions,basicValue,value=>{paletteReuse.value='';color=value===basicValue?currentColor:value;update();});
+ const paletteReuse=select([['','自动处理配色'],...(state.palettes||[]).map(p=>[p.id,p.name+' · '+p.rgb.length+' 色'])],'',value=>{if(value){color=value;const palette=(state.palettes||[]).find(p=>p.id===value);basicColor.value='new:'+palette.rgb.length;}else{basicColor.value=basicValue;color=currentColor;}update();});
+ controls.append(field('颜色',basicColor),field('帧精简',select([['balanced','推荐'],['smooth','更多细节'],['compact','更少帧']],profile,value=>{profile=value;update();})),note('修改颜色或精简程度后更新当前动作，无需重新渲染。'));
+ controls.append(details('高级配色设置',note('仅在需要跨人物或跨动作复用指定配色时使用。一般保持自动处理即可。'),field('复用调色板',paletteReuse),...(appliedPalette?[note('当前成果已保存配色；只调整帧精简时会继续使用。')]:[])));
 
- controls.append(note('正在预览固定的生成结果。装备和原动作上的后续编辑不会改变这份图集。'),properties([['记录',deliveryTitle(d)],['装备',d.equipment?.config?.weapon_name||(d.equipment?'标准单手剑':'空手')],['视角',viewName(item.info.view)],['时长',Number(item.info.duration_seconds).toFixed(2)+' 秒'],['帧数',item.info.frame_count+(item.game?' → '+item.game.info.frame_count:'')]]));
- const siblings=c.deliveries.filter(x=>x.kind!=='sequence'&&x.clips.some(i=>i.name===item.name));controls.append(field('此动作的图集版本',select(siblings.map(x=>[x.id,deliveryTitle(x)]),d.id,id=>choose({type:'sheet',delivery:id,clip:item.name}))));
- if(item.info.body_height_px)controls.append(properties([['标准站姿高度',item.info.body_height_px+'px'],['自动画布',item.info.frame_width+' × '+item.info.frame_height],['脚底锚点',item.info.anchor_px?.map(v=>Number(v).toFixed(1)).join(', ')]]));
- controls.append(properties([['朝向补偿',Number(item.info.heading?.degrees||0).toFixed(1)+'°']]));if(d.heading_stale)controls.append(note('动作朝向已更新；这份历史图集保留旧角度，请重新生成以应用校准。'));
- const quality=item.info.quality;if(quality){controls.append(tag(quality.status==='review'?'自动检查：需复核':'自动检查：通过',quality.status==='review'?'warning':'good'));for(const w of quality.warnings||[])controls.append(note(w.message));if(quality.loop?.status==='review')controls.append(note('循环复核：'+quality.loop.message));}
- controls.append(node('h3','下载'),link('下载当前预览版本（ZIP）',d.export+'&clip='+encodeURIComponent(item.name)+'&variant='+(chosen===item?'source':'game')),link('下载此记录完整包（ZIP）',d.export),link('完整采样 PNG',item.sheet),link('完整采样 GIF',item.gif));if(item.game)controls.append(link('游戏精简 PNG',item.game.sheet),link('游戏精简 GIF',item.game.gif),link('Godot SpriteFrames（随 PNG 使用）',item.game.spriteframes));controls.append(link('时序与质量清单',d.manifest));
-
- $('viewport-note').textContent=`${chosen===item?'完整采样版':'游戏精简版 · 按逐帧时长播放'} · ${chosen.info.frame_count} 帧 · ${Number(chosen.info.duration_seconds).toFixed(2)} 秒 · ${chosen.info.frame_width}px · ${d.equipment?usageSummary(d.equipment.usage,item.name):'空手'}。`;
+ const download=link(selection.compareRaw?'导出原色对照动作':'导出当前动作',(selection.compareRaw&&!(item.comparison&&chosen!==baseItem)?raw:d).export+'&clip='+encodeURIComponent(item.name)+'&variant='+(selection.compareRaw&&item.comparison&&chosen!==baseItem?'comparison':chosen===baseItem?'source':'game'));download.classList.add('delivery-export');
+ controls.append(apply,download,button('导出 Godot 人物包',openGamePackage,'full',!readyServer()));
+ const siblings=c.deliveries.filter(x=>x.kind!=='sequence'&&x.clips.some(i=>i.name===item.name));controls.append(details(`版本历史 · ${siblings.length}`,field('查看版本',select(siblings.map(x=>[x.id,deliveryTitle(x)]),d.id,id=>selectDelivery(id,item.name))),note('切换版本会保留该动作的浏览选择；历史产物不会覆盖。')));
+ const qualityDetails=details('质量与使用限制',note('自动检查不代表动作语义、美术或循环接缝已验收。'));for(const w of quality?.warnings||[])qualityDetails.append(note(w.message));if(quality?.loop?.status==='review')qualityDetails.append(note('循环：'+quality.loop.message));controls.append(qualityDetails);
+ controls.append(details('渲染设置与来源',properties([['渲染器',rendererName(d.renderer)],['画布',item.info.frame_width+' × '+item.info.frame_height],['脚底锚点',item.info.anchor_px?.map(v=>Number(v).toFixed(1)).join(', ')],['记录',deliveryTitle(d)]]),note('改变尺寸、视角或装备需要重新渲染。'),button('重新配置渲染',()=>openExport(d.batch,[item.name+'.fbx']),'full',blocked()),button('查看全部质量记录',()=>choose({type:'quality'}),'full')));
+ const files=details('单项文件与完整记录',link('完整记录 ZIP',d.export),link('完整采样 PNG',item.sheet),link('完整采样 GIF',item.gif),link('时序与质量清单',d.manifest));if(item.game)files.append(link('精简 PNG',item.game.sheet),link('精简 GIF',item.game.gif),link('Godot SpriteFrames',item.game.spriteframes));controls.append(files);
+ $('viewport-note').textContent=`${selection.compareRaw?'原色对照':'当前成果'} · ${chosen.info.frame_count} 帧 · ${Number(chosen.info.duration_seconds).toFixed(2)} 秒 · 操作只创建新版本。`;
 }
 function renderExport(){
  const c=state.selected,p=prefs(),root=$('export-controls');root.replaceChildren();const sources=c.batches.filter(b=>b.current_rig);let b=sources.find(b=>b.id===p.exportSource)||sources[0];
@@ -138,4 +161,19 @@ function renderExport(){
  root.append(note('以标准站姿高度确定像素密度，自动扩大画布容纳动作与武器，人物不会因此缩小。保留贴图细节，不自动减色或描边。'));
  root.append(note('输出完整采样版、游戏精简版、GIF、时序与质检清单。完成后自动打开结果。'));
  submit=button(`生成 ${chosen.length} 个动作的图集`,async()=>{const ok=await start('bake',{batch:b.id,files:chosen,renderer:p.renderer||'godot',view:p.view||'three_quarter',body_height:p.body_height||96,supersample:p.supersample||4,equipment_id:p.equipment||null});if(ok)$('export-dialog').close();},'primary full',blocked()||!readyServer()||!chosen.length);root.append(submit);
+}
+
+function openGamePackage(){
+ $('game-package-dialog')?.remove();const dialog=node('dialog');dialog.id='game-package-dialog';const top=node('div',undefined,'dialog-top');top.append(node('h2','导出 Godot 人物包'),button('关闭',()=>dialog.close()));dialog.append(top,note('为四个用途选择图集。默认使用推荐精简版；根节点固定为脚底锚点。素材包包含人物场景和动作预览。'));
+ const c=state.selected,options=c.deliveries.filter(d=>!d.heading_stale).flatMap(d=>d.clips.map(item=>({id:d.id+'/'+item.name,d,item}))),choices={};let variant='game';
+ dialog.append(field('图集版本',select([['game','游戏精简版（推荐）'],['source','完整采样版']],variant,v=>{variant=v;})));
+ for(const role of ['idle','walk','run','jump']){const aliases={idle:['breathing_idle','idle'],walk:['walking','walk'],run:['running','run','fast_run'],jump:['standing_jump','jump']};
+  const match=options.find(o=>c.batches.find(b=>b.id===o.d.batch)?.action_roles?.[o.item.name+'.fbx']===role)||options.find(o=>aliases[role].includes(o.item.name));choices[role]=match?.id||'';
+  const preview=node('img');preview.style.width='60px';preview.style.height='60px';preview.style.objectFit='contain';preview.alt=ROLE_LABELS[role]+' 所选图集预览';if(match)preview.src=match.item.game?.gif||match.item.gif;else preview.hidden=true;
+  const row=node('div',undefined,'package-role-row');row.append(field(ROLE_LABELS[role],select([['','请选择图集'],...options.map(o=>[o.id,o.item.name+' · '+(o.item.info.body_height_px||'?')+'px · '+deliveryTitle(o.d)])],choices[role],v=>{choices[role]=v;const option=options.find(o=>o.id===v);preview.hidden=!option;if(option)preview.src=option.item.game?.gif||option.item.gif;})),preview);dialog.append(row);
+ }
+ const status=note('导出前检查比例、视角、绑定与时序；循环接缝仍需目视检查。');dialog.append(status,button('下载人物包',async()=>{if(Object.values(choices).some(v=>!v)){status.textContent='请先选齐四个动作用途。';return;}
+  const selections=Object.fromEntries(Object.entries(choices).map(([role,id])=>{const [delivery,clip]=id.split('/');return [role,{delivery,clip}];}));
+  try{status.textContent='正在检查并打包…';const urlBase='/api/game-package?character='+encodeURIComponent(selected)+'&variant='+variant+'&selections='+encodeURIComponent(JSON.stringify(selections));const check=await fetch(urlBase+'&inspect=1'),report=await check.json();if(!check.ok)throw Error(report.error||'检查失败');const response=await fetch(urlBase);if(!response.ok){const data=await response.json();throw Error(data.error||'导出失败');}const blob=await response.blob(),url=URL.createObjectURL(blob),a=node('a');a.href=url;a.download=selected+'-godot.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);status.textContent='已导出。解压后打开 project.godot 预览；已有项目复制 character_assets 文件夹。'+(report.warnings.length?' 需复核：'+report.warnings.join('；'):'');}catch(e){status.textContent=e.message;}
+ },'primary full'));document.body.append(dialog);dialog.showModal();
 }

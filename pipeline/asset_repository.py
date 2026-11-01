@@ -162,7 +162,7 @@ class AssetRepository:
                 continue
             request=read(receipt.parent/'request.json',{})
             titles={a.lower().replace(' ','_')+'.fbx':a for a in request.get('names',[]) if isinstance(a,str)}
-            batches.append({'titles':titles,'id':receipt.parent.name, 'fingerprint': self.digest(receipt),
+            batches.append({'action_roles':info.get('action_roles',{}),'loop_intent':info.get('loop_intent',{}),'preset':info.get('preset'),'titles':titles,'id':receipt.parent.name, 'fingerprint': self.digest(receipt),
                             'files': list(info.get('files', {})), 'hashes': info.get('files', {}),
                             'current_rig': rig_ready and info.get('rig_sha256') == state.get('bound_sha256')})
         from motion_heading import records as heading_records
@@ -190,11 +190,12 @@ class AssetRepository:
             current_headings = heading_records(self.root, character, info.get('source',{}).get('files',{}))
             heading_stale = any(abs(float(info.get(Path(f).stem+'_spritesheet.png',{}).get('heading',{}).get('degrees',0)) - float(value.get('degrees',0))) > 0.001 for f,value in current_headings.items())
             deliveries.append({'id':manifest.parent.name, 'batch':info.get('source', {}).get('batch'),
-                               'heading_stale':heading_stale, 'operation':info.get('operation'), 'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
+                               'color_processing':info.get('color_processing'),'heading_stale':heading_stale, 'operation':info.get('operation'), 'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
                                'quality_report':info.get('quality_report'), 'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
                                'clips':[{'name':p.stem.replace('_preview',''), 'gif':self.asset(p),
                                          'sheet':self.asset(p.with_name(p.name.replace('_preview.gif','_spritesheet.png'))),
                                          'info':info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}),
+                                         'comparison':self.game_clip(manifest.parent,info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}).get('color_comparison')),
                                          'game':self.game_clip(manifest.parent,info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}).get('game'))}
                                         for p in sorted(manifest.parent.glob('*_preview.gif'))],
                                'export':'/api/export?character='+character+'&delivery='+manifest.parent.name})

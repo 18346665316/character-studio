@@ -65,3 +65,11 @@ const groupsTest=sheetGroups({batches:[{id:'b',titles:{'idle.fbx':'Idle','attack
 if(groupsTest.length!==2||groupsTest[0].title!=='Attack'||groupsTest[1].title!=='Idle')throw Error('Sheets must be grouped and ordered by action');
 if(groupsTest[1].versions.map(v=>v.delivery.id).join(',')!=='new,old')throw Error('Action versions must retain exact record references and exclude sequence outputs');
 `,context);
+vm.runInContext(`
+renderDraft=()=>{};
+applyActionPreset({id:'basic_movement',version:1,actions:[{title:'Breathing Idle',role:'idle'},{title:'Running',role:'run'}]});
+replaceDraftTitle(1,'Jogging');
+const payload=presetPayload();
+if(payload.roles.Jogging!=='run'||payload.roles.Running||payload.preset.id!=='basic_movement')throw Error('Preset replacement lost role or source');
+if(payload.actions.join(',')!=='Breathing Idle,Jogging')throw Error('Preset request not updated');
+`,context);

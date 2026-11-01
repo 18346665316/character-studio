@@ -423,6 +423,8 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         if not cameras or not cameras[0] or any(camera!=cameras[0] for camera in cameras):
             raise ValueError('编排动作相机参数不一致，拒绝发布统一预览')
     metadata['source'] = {'character': character, 'batch': batch, 'job': job_id, 'files': files}
+    for key in ('action_roles','loop_intent','preset'):
+        if key in data: metadata['source'][key]=data[key]
     if data.get('kind')=='sequence': metadata['source']['kind']='sequence'
     if equipment_config:
         metadata['equipment'] = {'id': equipment_id, 'config': equipment_config, 'usage':equipment_usage}

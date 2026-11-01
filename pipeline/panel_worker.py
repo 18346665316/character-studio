@@ -65,6 +65,9 @@ def execute(job, persist):
         target = ws / 'animations' / batch
         target.mkdir(parents=True, exist_ok=True)
         request = {'character': character, 'rig_sha256': binding['bound_sha256'], 'names': params['actions']}
+        from action_presets import receipt_metadata
+        metadata=receipt_metadata(params) if params.get('roles') or params.get('preset') else {}
+        request.update(metadata)
         request_path = target / 'request.json'
         if request_path.exists() and json.loads(request_path.read_text()) != request:
             raise ValueError('绑定版本或动作配置已变化，请创建新的下载任务')
@@ -91,7 +94,7 @@ def execute(job, persist):
             check_animation(info, binding['geometry'])
             files.append(path)
         receipt = {'character': character, 'batch': batch, 'rig_sha256': binding['bound_sha256'],
-                   'files': {p.name: studio.digest(p) for p in files}}
+                   'files': {p.name: studio.digest(p) for p in files}, **metadata}
         save(target / 'batch.json', receipt)
         studio.progress_update(character, 'download', '动作下载与结构检查完成，请生成预览并人工验收',
                                status='waiting', batch=batch)
@@ -110,6 +113,9 @@ def execute(job, persist):
     elif action == 'review':
         from review_character import review
         outputs['review'] = str(review(character, params['batch'], capture_only=not params.get('heading_file'), heading_file=params.get('heading_file')).relative_to(studio.BASE_DIR))
+    elif action == 'palette':
+        from palette_delivery import run
+        outputs['delivery']=str(run(studio.BASE_DIR,character,params))
     elif action == 'compact':
         from compact_delivery import run
         outputs['delivery']=str(run(studio.BASE_DIR,character,params))
@@ -140,14 +146,14 @@ def main():
     job.update(status='running', started_at=stamp(), pid=os.getpid(), error=None)
     save(path, job)
     try:
-        if job['action'] in ('bake','sequence','compact'):
+        if job['action'] in ('bake','sequence','compact','palette'):
             studio.progress_update(job['character'],'validate','正在启动新任务，检查输入')
         with task_lock(studio.BASE_DIR, lock_fd):
             execute(job, lambda: save(path, job))
         job.update(status='succeeded', finished_at=stamp())
     except BaseException as exc:
         traceback.print_exc()
-        if job['action'] in ('bake','sequence','compact'):
+        if job['action'] in ('bake','sequence','compact','palette'):
             progress=studio.progress_read(job['character']) or {}
             quality_path=Path(progress.get('job',''))/'quality.json'
             if quality_path.is_file() and quality_path.resolve().is_relative_to((studio.BASE_DIR/'.local/jobs').resolve()):
