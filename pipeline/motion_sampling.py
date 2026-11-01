@@ -66,12 +66,12 @@ def analyze(probe,frame_size,camera_size,view='three_quarter'):
 
 
 def run(root,character,files,equipment_id=None):
-    from panel import Panel,read,atomic
+    from asset_repository import AssetRepository,read,atomic
     from studio_core import new_batch,GODOT
     from mixamo_state import require_ready
     from equipment import load,copy_runtime,stage_model
     from equipment_usage import load as usage_load,recipe,fingerprint
-    panel=Panel(root);c=panel.character(character)
+    assets=AssetRepository(root);c=assets.character(character)
     binding=require_ready(character)
     batch_by_id={b['id']:b for b in c['batches'] if b['current_rig']}
     sources={};hashes={}
@@ -82,22 +82,22 @@ def run(root,character,files,equipment_id=None):
         b=batch_by_id[parts[0]]
         if not (c['approvals'].get('motions',{}).get(b['id'],{}).get('fingerprint')==b['fingerprint'] or c['approvals'].get('animations',{}).get(b['id'],{}).get(parts[1],{}).get('fingerprint')==b['fingerprint']):
             raise ValueError('Please approve the source animation before quality analysis')
-        path=panel.scoped(f'workspaces/{character}/animations/{value}',f'workspaces/{character}/animations')
-        sha=panel.digest(path)
+        path=assets.scoped(f'workspaces/{character}/animations/{value}',f'workspaces/{character}/animations')
+        sha=assets.digest(path)
         if sha!=b['hashes'][parts[1]]:raise ValueError('Source animation changed')
         if path.stem in sources:raise ValueError('Diagnostic clip names must be unique')
         sources[path.stem]=path;hashes[path.name]=sha
-    job=panel.root/'.local/quality'/('sampling-'+new_batch());project=job/'godot'
-    shutil.copytree(panel.root/'pipeline/godot',project,ignore=shutil.ignore_patterns('.godot'))
+    job=assets.root/'.local/quality'/('sampling-'+new_batch());project=job/'godot'
+    shutil.copytree(assets.root/'pipeline/godot',project,ignore=shutil.ignore_patterns('.godot'))
     (project/'animations').mkdir()
     for path in sources.values():shutil.copy2(path,project/'animations'/path.name)
     equipment_pin=None
     if equipment_id:
-        config=load(panel.root,character,None,equipment_id)
+        config=load(assets.root,character,None,equipment_id)
         if config['rig_sha256']!=binding['bound_sha256']:raise ValueError('Equipment rig mismatch')
-        copy_runtime(panel.root,project);stage_model(config,panel.root/'workspaces'/character/'equipment'/equipment_id/'weapon.glb',project)
+        copy_runtime(assets.root,project);stage_model(config,assets.root/'workspaces'/character/'equipment'/equipment_id/'weapon.glb',project)
         atomic(project/'equipment.json',config)
-        usage=usage_load(panel.root,character,equipment_id);equipment_pin=fingerprint(usage)
+        usage=usage_load(assets.root,character,equipment_id);equipment_pin=fingerprint(usage)
         atomic(project/'equipment_usage.json',recipe(usage,hashes))
     with (job/'analysis.log').open('w') as log:
         for args in ([GODOT,'--headless','--editor','--path',str(project),'--import'],[GODOT,'--headless','--path',str(project),'--script','res://sample_motion.gd','--',str(job/'probe.json')]):
@@ -115,9 +115,9 @@ def run(root,character,files,equipment_id=None):
             camera_size=1.12*max(float(np.nanmax(right)-np.nanmin(right)),float(np.nanmax(xyz[:,:,1])-np.nanmin(xyz[:,:,1])))
             view='three_quarter';projection='estimated_landmark_bounds'
         reports[key]={str(size):{**analyze(probe,size,camera_size,view),'projection_source':projection} for size in (64,128)}
-    if require_ready(character)['bound_sha256']!=binding['bound_sha256'] or any(panel.digest(path)!=hashes[path.name] for path in sources.values()):
+    if require_ready(character)['bound_sha256']!=binding['bound_sha256'] or any(assets.digest(path)!=hashes[path.name] for path in sources.values()):
         raise ValueError('分析期间绑定或源动作已变化，请重新分析')
-    result={'schema':1,'character':character,'rig_sha256':binding['bound_sha256'],'sources':{k:{'path':str(p.relative_to(panel.root)),'sha256':hashes[p.name]} for k,p in sources.items()},'equipment_id':equipment_id,'equipment_usage_sha256':equipment_pin,'reports':reports,'status':'diagnostic_only'}
+    result={'schema':1,'character':character,'rig_sha256':binding['bound_sha256'],'sources':{k:{'path':str(p.relative_to(assets.root)),'sha256':hashes[p.name]} for k,p in sources.items()},'equipment_id':equipment_id,'equipment_usage_sha256':equipment_pin,'reports':reports,'status':'diagnostic_only'}
     atomic(job/'report.json',result)
     lines=['# 自动采样诊断','', '仅分析，不改变生产采样设置。以 30 FPS 为参考，120 Hz 探测骨骼、朝向探针与实际装备包围盒轨迹。阈值为待校准策略；不等同于最终轮廓与贴图质量验收。','', '| 动作 | 尺寸 | 时长 | 建议 FPS | 帧数 | 95%额外误差(px) | 峰值额外误差(px) | 循环端点差(px) |','|---|---:|---:|---:|---:|---:|---:|---:|']
     for key,sizes in reports.items():

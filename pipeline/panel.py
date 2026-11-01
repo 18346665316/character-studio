@@ -2,8 +2,6 @@
 import argparse
 import base64
 from datetime import datetime, timezone
-import fcntl
-import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -17,6 +15,8 @@ from urllib.parse import parse_qs, unquote, urlparse, quote
 import zipfile
 
 from PIL import Image
+from asset_repository import AssetRepository, name, read, atomic
+from task_lock import acquire, serialized, TaskBusyError
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
@@ -29,249 +29,39 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def name(value):
-    import re
-    if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}', value):
-        raise ValueError('名称限 1–80 个字母、数字、下划线或短横线')
-    return value
-
-
-def read(path, fallback=None):
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return fallback
-
-
-def atomic(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + '.' + secrets.token_hex(4) + '.tmp')
-    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
-    os.replace(temp, path)
-
-
-class Panel:
+class Panel(AssetRepository):
     def __init__(self, root=BASE_DIR):
-        self.root = Path(root).resolve()
+        super().__init__(root)
         self.storage = self.root / '.local/panel'
         self.tasks_dir = self.storage / 'tasks'
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
         self.mutex = threading.RLock()
-        self.hash_cache = {}
         self.children = []
 
-    def scoped(self, relative, subtree=None):
-        if not isinstance(relative, str):
-            raise ValueError('非法资产路径')
-        candidate = self.root / relative
-        # Reject symlink components before resolving the requested boundary too.
-        try:
-            components = candidate.relative_to(self.root).parts
-        except ValueError:
-            raise ValueError('资产路径越界')
-        current = self.root
-        for part in components:
-            current = current / part
-            if current.is_symlink():
-                raise ValueError('不允许通过符号链接访问资产')
-        path = candidate.resolve()
-        boundary = (self.root / subtree).resolve() if subtree else self.root
-        if not path.is_relative_to(boundary) or path == boundary:
-            raise ValueError('资产路径越界')
-        return path
-
-    def digest(self, path):
-        stat = path.stat()
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
-        if key not in self.hash_cache:
-            if len(self.hash_cache) > 500:
-                self.hash_cache.clear()
-            self.hash_cache[key] = hashlib.sha256(path.read_bytes()).hexdigest()
-        return self.hash_cache[key]
-
-    def game_clip(self, directory, info):
-        if not info:return None
-        return {'sheet':self.asset(directory/info['sheet']), 'gif':self.asset(directory/info['gif']),
-                'spriteframes':self.asset(directory/info['spriteframes']), 'info':info}
-
-    def asset(self, path):
-        return '/asset/' + quote(str(path.relative_to(self.root)), safe='/') if path.is_file() else None
-
-    def asset_path(self, relative):
-        # Expose only character production assets, never .local, credentials, code,
-        # arbitrary files or a symlink outside its original character subtree.
-        parts = Path(relative).parts
-        if len(parts)==3 and parts[0]=='weapons':
-            from weapon_assets import load as load_weapon, asset_dir
-            load_weapon(self.root,parts[1])
-            if parts[2] not in ('front.png','contact.png','model.glb','original.png','processed.png'):
-                raise ValueError('禁止访问此武器文件')
-            return self.scoped(relative,'weapons/'+parts[1])
-        if len(parts) < 4 or parts[0] not in ('workspaces', 'deliverables'):
-            raise ValueError('禁止访问此文件')
-        name(parts[1])
-        if parts[0] == 'workspaces' and parts[2] not in ('inputs', 'models', 'rig', 'animations', 'reviews', 'equipment'):
-            raise ValueError('禁止访问此工作区目录')
-        if parts[0] == 'deliverables':
-            name(parts[2])
-        path = self.scoped(relative, '/'.join(parts[:3]))
-        if path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.glb', '.fbx', '.zip', '.json', '.tres') or not path.is_file():
-            raise ValueError('文件不存在或不可预览')
-        return path
-
     def worker_lock(self):
-        fd = os.open(self.storage / 'worker.lock', os.O_CREAT | os.O_RDWR, 0o600)
+        return acquire(self.root)
+
+    def recover_jobs(self):
+        """Reconcile abandoned receipts only while holding the execution lease."""
+        fd = self.worker_lock()
+        if fd is None:
+            return
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+            # Read after taking the lease; a just-finished worker may have updated it.
+            for path in self.tasks_dir.glob('*.json'):
+                job = read(path)
+                if job and job['status'] in ('queued', 'running'):
+                    job.update(status='interrupted', error='任务进程已结束且未写入完成记录，可重试当前步骤。', finished_at=now())
+                    atomic(path, job)
+        finally:
             os.close(fd)
-            return None
-        return fd
 
     def jobs(self):
-        jobs = []
-        # Poll/reap only our own child handles; workers keep running if HTTP exits.
+        """Read task history without changing task receipts."""
         self.children[:] = [p for p in self.children if p.poll() is None]
-        for path in self.tasks_dir.glob('*.json'):
-            job = read(path)
-            if job:
-                jobs.append(job)
-        fd = self.worker_lock()
-        if fd is not None:
-            try:
-                for job in jobs:
-                    if job['status'] in ('queued', 'running'):
-                        job.update(status='interrupted', error='任务进程已结束且未写入完成记录，可重试当前步骤。', finished_at=now())
-                        atomic(self.tasks_dir / (job['id'] + '.json'), job)
-            finally:
-                os.close(fd)
+        jobs = [job for path in self.tasks_dir.glob('*.json') if (job := read(path))]
         return sorted(jobs, key=lambda j:j['created_at'], reverse=True)[:60]
-
-    def character(self, character):
-        character = name(character)
-        ws = self.root / 'workspaces' / character
-        if not ws.is_dir() or ws.is_symlink():
-            raise ValueError('角色不存在')
-        relative = lambda p: str(p.relative_to(self.root))
-        files = lambda pattern: sorted(ws.glob(pattern), key=lambda p:p.stat().st_mtime, reverse=True)
-        inputs = [{'path': relative(p), 'url': self.asset(p), 'name': p.name} for p in sorted(ws.glob('inputs/*/*'), key=lambda p:p.parent.stat().st_mtime, reverse=True)
-                  if p.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp') and not p.is_symlink()][:20]
-        model = ws / 'models' / (character + '.obj')
-        prepared = None
-        for path in files('models/prepared/*/prepare.json'):
-            info = read(path, {})
-            if model.is_file() and info.get('source_sha256') == self.digest(model):
-                prepared = {'id': path.parent.name, 'fingerprint': self.digest(path), 'info': info,
-                            'contact': self.asset(path.parent / 'previews/contact_sheet.png'),
-                            'glb': self.asset(path.parent / 'preview.glb')}
-                break
-        optimizations=[]
-        for report_path in files('models/optimizations/*/report.json'):
-            report=read(report_path,{})
-            if model.is_file() and report.get('source_sha256')==self.digest(model):
-                optimizations.append({'id':report_path.parent.name,'report':report,'comparison':self.asset(report_path.parent/'comparison.png'),
-                                      'report_url':self.asset(report_path),'pixel_comparisons':{str(size):self.asset(report_path.parent/f'comparison_{size}.png') for size in (64,128)},
-                                      'variants':[{'id':v['id'],'triangles':v['triangles'],'glb':self.asset(report_path.parent/v['id']/'preview.glb')} for v in report.get('variants',[]) if v['id']!='original']})
-        state = read(self.root / '.local/mixamo' / character / 'state.json', {'status':'unbound'})
-        rig_ready = False
-        from mixamo_state import cloud_recoverable
-        recovery_available=cloud_recoverable(state)
-        if prepared and (state.get('status') == 'ready' or recovery_available) and state.get('human_reviewed'):
-            try:
-                bound = self.scoped(str(Path(state['bound_model']).relative_to(self.root)), f'workspaces/{character}/rig')
-                upload = ws / 'models/prepared' / prepared['id'] / 'mixamo.zip'
-                rig_ready = bound.is_file() and self.digest(bound) == state['bound_sha256'] and self.digest(upload) == state['source_sha256']
-            except (ValueError, KeyError, OSError):
-                pass
-        batches = []
-        for receipt in files('animations/*/batch.json'):
-            info = read(receipt, {})
-            if info.get('kind')=='sequence' or info.get('character') != character or info.get('batch') != receipt.parent.name:
-                continue
-            request=read(receipt.parent/'request.json',{})
-            titles={a.lower().replace(' ','_')+'.fbx':a for a in request.get('names',[]) if isinstance(a,str)}
-            batches.append({'titles':titles,'id':receipt.parent.name, 'fingerprint': self.digest(receipt),
-                            'files': list(info.get('files', {})), 'hashes': info.get('files', {}),
-                            'current_rig': rig_ready and info.get('rig_sha256') == state.get('bound_sha256')})
-        from motion_heading import records as heading_records
-        for batch_info in batches:
-            batch_info['headings'] = heading_records(self.root, character, batch_info['hashes'])
-        sequence_preview = read(self.scoped(f'workspaces/{character}/sequence_preview.json', f'workspaces/{character}'), None)
-        if sequence_preview and sequence_preview.get('heading_sources'):
-            sequence_preview['heading_stale'] = sequence_preview.get('headings') != heading_records(self.root, character, sequence_preview['heading_sources'])
-        reviews = []
-        for spec in files('reviews/*/viewer/review.json'):
-            info = read(spec, {})
-            captures = spec.parent / 'captures'
-            report = spec.parent / 'character-report.json'
-            if report.is_file():
-                reviews.append({'id':spec.parent.parent.name, 'batch':info.get('batch'),
-                                'files':info.get('files'), 'headings':info.get('headings',{}),
-                                'images':[{'name':p.stem, 'url':self.asset(p)} for p in sorted(captures.glob('*.png'))],
-                                'report':self.asset(report)})
-        deliveries = []
-        for manifest in sorted((self.root / 'deliverables' / character).glob('*/manifest.json'),
-                               key=lambda p:p.stat().st_mtime, reverse=True):
-            info = read(manifest, {})
-            if info.get('source', {}).get('character') != character:
-                continue
-            current_headings = heading_records(self.root, character, info.get('source',{}).get('files',{}))
-            heading_stale = any(abs(float(info.get(Path(f).stem+'_spritesheet.png',{}).get('heading',{}).get('degrees',0)) - float(value.get('degrees',0))) > 0.001 for f,value in current_headings.items())
-            deliveries.append({'id':manifest.parent.name, 'batch':info.get('source', {}).get('batch'),
-                               'heading_stale':heading_stale, 'operation':info.get('operation'), 'renderer':info.get('renderer','godot'), 'kind':info.get('source',{}).get('kind'),
-                               'quality_report':info.get('quality_report'), 'manifest':self.asset(manifest), 'equipment':info.get('equipment'), 'settings':info.get('pixel_style', {}),
-                               'clips':[{'name':p.stem.replace('_preview',''), 'gif':self.asset(p),
-                                         'sheet':self.asset(p.with_name(p.name.replace('_preview.gif','_spritesheet.png'))),
-                                         'info':info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}),
-                                         'game':self.game_clip(manifest.parent,info.get(p.name.replace('_preview.gif','_spritesheet.png'),{}).get('game'))}
-                                        for p in sorted(manifest.parent.glob('*_preview.gif'))],
-                               'export':'/api/export?character='+character+'&delivery='+manifest.parent.name})
-        if sequence_preview and any(d['id'] == sequence_preview.get('delivery') and d.get('heading_stale') for d in deliveries):
-            sequence_preview['heading_stale'] = True
-        equipment = []
-        from equipment import load as load_equipment
-        for config_path in files('equipment/*/equipment.json'):
-            config = read(config_path, {})
-            try:
-                load_equipment(self.root, character, None, config_path.parent.name)
-            except (ValueError, OSError, TypeError, KeyError):
-                continue
-            compatible=[]
-            for batch in batches:
-                try:
-                    load_equipment(self.root,character,batch['id'],config_path.parent.name)
-                    compatible.append(batch['id'])
-                except (ValueError,OSError,TypeError,KeyError):
-                    continue
-            from equipment_usage import load as load_usage
-            try: usage=load_usage(self.root,character,config_path.parent.name)
-            except (ValueError,OSError,TypeError,KeyError): usage=None
-            equipment.append({'usage':usage,'id':config_path.parent.name, 'batch':config['batch'], 'compatible_batches':compatible, 'bone':config['bone'],
-                              'weapon':config['weapon'], 'weapon_name':config.get('weapon_name','标准单手剑'), 'scale':config['weapon_scale'],
-                              'config':self.asset(config_path), 'preview':self.asset(config_path.parent/'review.png')})
-        approvals = read(ws / 'panel_approvals.json', {})
-        model_ok = bool(prepared and approvals.get('model', {}).get('fingerprint') == prepared['fingerprint'])
-        profile=read(ws/'character.json',{})
-        return {'id':character, 'display_name':profile.get('display_name',character), 'inputs':inputs, 'has_model':model.is_file(), 'prepared':prepared,
-                'rig':{'status':state.get('status'), 'ready':bool(rig_ready), 'recovery_available':bool(rig_ready and recovery_available), 'error':state.get('error')}, 'batches':batches,
-                'equipment':equipment, 'reviews':reviews[:12], 'deliveries':deliveries, 'approvals':approvals,
-                'sequence_preview':sequence_preview,
-                'sequence':read(self.scoped(f'workspaces/{character}/sequence.json',f'workspaces/{character}'), None),
-                'model_approved':model_ok, 'optimizations':optimizations,
-                'progress':read(self.root / '.local/progress' / (character+'.json'))}
-
-    def catalog(self):
-        return [{'id':p.name, 'display_name':read(p/'character.json',{}).get('display_name',p.name)} for p in sorted((self.root / 'workspaces').glob('*'))
-                if p.is_dir() and not p.is_symlink() and self._valid(p.name)]
-
-    @staticmethod
-    def _valid(value):
-        try:
-            name(value)
-            return True
-        except ValueError:
-            return False
 
     def upload_model(self,data):
         from import_model import validate_glb
@@ -456,20 +246,20 @@ class Panel:
     def start(self, data):
         with self.mutex:
             character = name(data.get('character'))
-            retry_id = data.get('retry')
-            old = None
-            if retry_id:
-                old = read(self.tasks_dir / (name(retry_id)+'.json'))
-                if not old or old['character'] != character or old['status'] not in ('failed','interrupted'):
-                    raise ValueError('只能重试本角色失败或中断的任务')
-                action, params = old['action'], old['params']
-            else:
-                action, params = data.get('action'), data.get('params', {})
-            clean = self.validate_task(character, action, params)
             fd = self.worker_lock()
             if fd is None:
-                raise ValueError('已有任务在运行，请等待完成后再操作')
+                raise TaskBusyError('已有任务在运行，请等待完成后再操作')
             try:
+                retry_id = data.get('retry')
+                old = None
+                if retry_id:
+                    old = read(self.tasks_dir / (name(retry_id)+'.json'))
+                    if not old or old['character'] != character or old['status'] not in ('failed','interrupted'):
+                        raise ValueError('只能重试本角色失败或中断的任务')
+                    action, params = old['action'], old['params']
+                else:
+                    action, params = data.get('action'), data.get('params', {})
+                clean = self.validate_task(character, action, params)
                 task_id = old['id'] if old else datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+secrets.token_hex(4)
                 path = self.tasks_dir / (task_id+'.json')
                 job = old or {'id':task_id, 'character':character, 'action':action,
@@ -494,10 +284,9 @@ class Panel:
             finally:
                 os.close(fd)
 
+    @serialized(lambda self, *args, **kwargs: self.root)
     def approve(self, data):
         with self.mutex:
-            if any(j['status'] in ('queued','running') for j in self.jobs()):
-                raise ValueError('请等待当前任务结束后再验收')
             character = name(data.get('character'))
             c = self.character(character)
             path = self.root/'workspaces'/character/'panel_approvals.json'
@@ -531,6 +320,7 @@ class Panel:
             atomic(path,record)
             return {'ok':True}
 
+    @serialized(lambda self, *args, **kwargs: self.root)
     def save_sequence(self, data):
         character = name(data.get('character'))
         c = self.character(character)
@@ -617,6 +407,7 @@ def handler(panel):
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/state':
                     with panel.mutex:
+                        panel.recover_jobs()
                         result = {'api_version':18,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
@@ -668,13 +459,9 @@ def handler(panel):
                     elif route == '/api/weapon/upload':
                         result=panel.upload_weapon(data)
                     elif route == '/api/weapon/calibrate':
-                        if any(j['status'] in ('queued','running') for j in panel.jobs()):
-                            raise ValueError('请等待当前任务完成后再确认武器')
                         from weapon_assets import calibrate
                         result=calibrate(panel.root,name(data.get('weapon')),data.get('length'),data.get('grip'))
                     elif route == '/api/equipment/usage':
-                        if any(j['status'] in ('queued','running') for j in panel.jobs()):
-                            raise ValueError('请等待当前任务完成后再保存持用设置')
                         from equipment_usage import save as save_usage
                         result=save_usage(panel.root,name(data.get('character')),name(data.get('equipment')),data.get('default'),data.get('mounts'),data.get('batch'),data.get('file'),data.get('action'))
                     elif route == '/api/sequence':

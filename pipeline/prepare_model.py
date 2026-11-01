@@ -1,4 +1,5 @@
 """Prepare TripoSR vertex-colored meshes for texture-preserving interchange."""
+from task_lock import serialized
 import hashlib
 import json
 from pathlib import Path
@@ -111,6 +112,7 @@ def prepare(source, destination, resolution=1024):
     return destination
 
 
+@serialized(lambda base, *args, **kwargs: base)
 def prepare_character(base, character):
     source = Path(base) / 'workspaces' / character / 'models' / f'{character}.obj'
     destination = source.parent / 'prepared' / uuid.uuid4().hex[:12]

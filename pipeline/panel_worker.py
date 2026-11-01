@@ -6,10 +6,11 @@ import sys
 import traceback
 from datetime import datetime, timezone
 
+from task_lock import task_lock
 import studio_core as studio
 from mixamo_state import require_ready
 from asset_inspector import inspect_download
-from mixamo_state import check_motion, check_mesh_identity
+from mixamo_state import check_animation
 
 
 def stamp():
@@ -74,8 +75,7 @@ def execute(job, persist):
             if path.is_file():
                 try:
                     info = inspect_download(path)
-                    check_mesh_identity(info, binding['geometry'])
-                    check_motion(info)
+                    check_animation(info, binding['geometry'])
                 except (ValueError, OSError, KeyError):
                     rejected = target / ('rejected-' + studio.new_batch())
                     rejected.mkdir()
@@ -88,8 +88,7 @@ def execute(job, persist):
                 studio.controller('download', name, path, '--character', character)
             # Always verify even freshly downloaded files before publishing the batch.
             info = inspect_download(path)
-            check_mesh_identity(info, binding['geometry'])
-            check_motion(info)
+            check_animation(info, binding['geometry'])
             files.append(path)
         receipt = {'character': character, 'batch': batch, 'rig_sha256': binding['bound_sha256'],
                    'files': {p.name: studio.digest(p) for p in files}}
@@ -132,8 +131,8 @@ def main():
     allowed = (studio.BASE_DIR / '.local/panel/tasks').resolve()
     if path.parent != allowed or path.suffix != '.json':
         raise ValueError('Invalid task receipt')
-    # The inherited flock descriptor keeps the machine-wide resource lock alive
-    # even when the HTTP panel is restarted. It is not inherited by child tools.
+    # The inherited descriptor keeps the project lease alive across panel restarts.
+    # Services explicitly forward the lease to their Python controller children.
     lock_fd = int(sys.argv[2])
     os.set_inheritable(lock_fd, False)
     job = json.loads(path.read_text())
@@ -143,7 +142,8 @@ def main():
     try:
         if job['action'] in ('bake','sequence','compact'):
             studio.progress_update(job['character'],'validate','正在启动新任务，检查输入')
-        execute(job, lambda: save(path, job))
+        with task_lock(studio.BASE_DIR, lock_fd):
+            execute(job, lambda: save(path, job))
         job.update(status='succeeded', finished_at=stamp())
     except BaseException as exc:
         traceback.print_exc()

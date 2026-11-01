@@ -1,6 +1,7 @@
 """Weapon presentation settings, independent of immutable grip annotations.
 Action overrides are keyed by source content hash, never by a display title.
 """
+from task_lock import serialized
 import hashlib
 import json
 import math
@@ -67,10 +68,11 @@ def fingerprint(data):
     return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def save(root,character,equipment_id,default,mounts,batch=None,file=None,action=None):
     from equipment import load as load_equipment
     from weapon_assets import digest
-    from panel import atomic
+    from asset_repository import atomic
     data=load(root,character,equipment_id)
     data.update(default=default,mounts=mounts)
     if batch is not None:

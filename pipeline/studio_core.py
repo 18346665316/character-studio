@@ -1,5 +1,7 @@
 """Studio owns code; workspaces own source assets; deliverables contain gated output."""
+from task_lock import serialized, child_options, task_lock
 import argparse
+from contextlib import nullcontext
 from datetime import datetime
 import hashlib
 import json
@@ -34,7 +36,7 @@ def new_batch():
 
 
 def run(args, cwd=BASE_DIR):
-    subprocess.run([str(a) for a in args], cwd=cwd, check=True, env={**os.environ, 'PYTHONUNBUFFERED': '1'})
+    subprocess.run([str(a) for a in args], cwd=cwd, check=True, **child_options())
 
 
 def digest(path):
@@ -60,11 +62,12 @@ def model_path(character, override=None):
     return path
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 def controller(*args):
     command=[str(a) for a in [PYTHON, BASE_DIR / 'pipeline/mixamo_controller.py', *args]]
     process=subprocess.Popen(command, cwd=BASE_DIR, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, bufsize=1,
-                             env={**os.environ, 'PYTHONUNBUFFERED':'1'})
+                             **child_options())
     reason=None
     try:
         for line in process.stdout:
@@ -86,6 +89,7 @@ def controller(*args):
         raise subprocess.CalledProcessError(code,command)
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 @track_failures
 def generate(character, image):
     progress_update(character, 'reconstruction', '正在生成新的 3D 模型')
@@ -121,6 +125,7 @@ def generate(character, image):
     print(f'模型已写入 {models}')
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 @track_failures
 def rig(character, model=None):
     progress_update(character, 'rig', '请在 Mixamo 浏览器中摆点并验收', status='waiting')
@@ -128,6 +133,7 @@ def rig(character, model=None):
     require_ready(character)
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 @track_failures
 def download(character, names, batch):
     binding = require_ready(character,allow_cloud_recovery=True)
@@ -199,6 +205,7 @@ def validate_sheet(path, frame_size=128, frame_count=None, allow_small=False):
         'loop':{'status':'review' if seam>.15 else 'unchecked','silhouette_endpoint_difference':seam,'message':'首尾轮廓差异较大，仅在需要循环时复核' if seam>.15 else '端点接近不代表速度连续，循环适用性仍需确认'}}}
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 @track_failures
 def prepare(character, render_preview=True):
     progress_update(character, 'prepare', '正在准备 UV 贴图、上传包与静态预览')
@@ -251,6 +258,7 @@ def make_game_version(sheet, timing, quality, equipment_usage=None):
     return result
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 @track_failures
 def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, equipment_id=None, renderer="godot", equipment_usage_sha256=None, selected_files=None, body_height=None):
     if renderer not in ('godot','blender'):
@@ -431,6 +439,7 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
     return destination
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 def adopt(character, batch):
     """Explicit human declaration for legacy files; never silently infer their owner."""
     source = workspace(character) / 'animations' / slug(batch)
@@ -445,6 +454,14 @@ def adopt(character, batch):
         'files': {p.name: digest(p) for p in files}
     }, indent=2) + '\n')
     print(f'已登记 {len(files)} 个历史动作；烘焙时仍须通过质量检查。')
+
+
+@serialized(lambda *args, **kwargs: BASE_DIR)
+def build(character, image, names, view):
+    generate(character, image)
+    prepare(character)
+    rig(character)
+    return bake(character, download(character, names, new_batch()), view)
 
 
 def status():
@@ -502,51 +519,53 @@ def main():
             p.add_argument('--actions', default='Idle,Running')
     args = parser.parse_args()
     try:
-        if args.command is None:
-            parser.print_help()
-        elif args.command == 'panel':
-            from panel import serve
-            serve()
-        elif args.command == 'monitor':
-            from monitor import serve
-            serve()
-        elif args.command == 'status':
-            status()
-        elif args.command == 'login':
-            controller('login')
-        elif args.command == 'web':
-            print('第三方预览台：临时输出不进入 deliverables；正式生产请使用 studio 3d/build。')
-            run([PYTHON, BASE_DIR / 'vendor/TripoSR/gradio_app.py'], cwd=BASE_DIR / 'vendor/TripoSR')
-        elif args.command == '3d':
-            generate(args.character, args.image)
-        elif args.command == 'prepare':
-            prepare(args.character)
-        elif args.command == 'rig':
-            rig(args.character, args.model)
-        elif args.command == 'anim':
-            require_ready(args.character, model_path(args.character, args.model))
-            batch = download(args.character, [args.name], new_batch())
-            print(f'动作批次: {batch}')
-        elif args.command == 'adopt':
-            adopt(args.character, args.batch)
-        elif args.command == 'review':
-            from review_character import review
-            review(args.character, args.batch, args.capture_only)
-        elif args.command == 'bake':
-            bake(args.character, args.batch, args.view, args.frame_size, args.supersample, args.equipment, args.renderer, body_height=args.body_height)
-        elif args.command == 'build':
-            names = [v.strip() for v in args.actions.split(',') if v.strip()]
-            if not names or len({slug(v.lower().replace(' ', '_')) for v in names}) != len(names):
-                raise ValueError('动作列表为空或存在重名')
-            generate(args.character, args.image)
-            prepare(args.character)
-            rig(args.character)
-            bake(args.character, download(args.character, names, new_batch()), args.view)
-        return 0
+        mutating = args.command in ('3d', 'prepare', 'rig', 'anim', 'bake', 'build', 'adopt', 'review', 'login')
+        with task_lock(BASE_DIR) if mutating else nullcontext():
+            try:
+                if args.command is None:
+                    parser.print_help()
+                elif args.command == 'panel':
+                    from panel import serve
+                    serve()
+                elif args.command == 'monitor':
+                    from monitor import serve
+                    serve()
+                elif args.command == 'status':
+                    status()
+                elif args.command == 'login':
+                    controller('login')
+                elif args.command == 'web':
+                    print('第三方预览台：临时输出不进入 deliverables；正式生产请使用 studio 3d/build。')
+                    run([PYTHON, BASE_DIR / 'vendor/TripoSR/gradio_app.py'], cwd=BASE_DIR / 'vendor/TripoSR')
+                elif args.command == '3d':
+                    generate(args.character, args.image)
+                elif args.command == 'prepare':
+                    prepare(args.character)
+                elif args.command == 'rig':
+                    rig(args.character, args.model)
+                elif args.command == 'anim':
+                    require_ready(args.character, model_path(args.character, args.model))
+                    batch = download(args.character, [args.name], new_batch())
+                    print(f'动作批次: {batch}')
+                elif args.command == 'adopt':
+                    adopt(args.character, args.batch)
+                elif args.command == 'review':
+                    from review_character import review
+                    review(args.character, args.batch, args.capture_only)
+                elif args.command == 'bake':
+                    bake(args.character, args.batch, args.view, args.frame_size, args.supersample, args.equipment, args.renderer, body_height=args.body_height)
+                elif args.command == 'build':
+                    names = [v.strip() for v in args.actions.split(',') if v.strip()]
+                    if not names or len({slug(v.lower().replace(' ', '_')) for v in names}) != len(names):
+                        raise ValueError('动作列表为空或存在重名')
+                    build(args.character, args.image, names, args.view)
+                return 0
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                if hasattr(args, 'character'):
+                    current = progress_read(args.character) or {}
+                    progress_update(args.character, current.get('stage', 'validate'), str(exc), status='failed')
+                raise
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        if hasattr(args, 'character'):
-            current = progress_read(args.character) or {}
-            progress_update(args.character, current.get('stage', 'validate'), str(exc), status='failed')
         print(f'任务失败: {exc}。没有发布新的交付资产；请检查工作区和 .local/jobs 日志。', file=sys.stderr)
         return 1
 

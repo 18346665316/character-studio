@@ -170,6 +170,7 @@ class PanelTests(unittest.TestCase):
 
     def test_dead_worker_is_marked_interrupted(self):
         atomic(self.panel.tasks_dir/'task1.json',{'id':'task1','status':'running','created_at':'2026-01-01'})
+        self.panel.recover_jobs()
         self.assertEqual(self.panel.jobs()[0]['status'],'interrupted')
 
     def test_retry_preserves_checkpoint_and_uses_no_shell(self):
@@ -211,7 +212,7 @@ class PanelTests(unittest.TestCase):
              patch.object(panel_worker.studio,'model_path',return_value=Path('model.zip')), \
              patch.object(panel_worker,'require_ready',return_value=binding), \
              patch.object(panel_worker,'inspect_download',return_value={}), \
-             patch.object(panel_worker,'check_mesh_identity'),patch.object(panel_worker,'check_motion'), \
+             patch.object(panel_worker,'check_animation'), \
              patch.object(panel_worker.studio,'controller') as controller, \
              patch.object(panel_worker.studio,'progress_update'):
             panel_worker.execute(job,lambda:None)
@@ -227,7 +228,7 @@ class PanelTests(unittest.TestCase):
         directory=self.root/'.local/jobs/compact-job'
         report={'schema':1,'summary':{'passed':0,'review':0,'failed':1},'results':[{'name':'idle','status':'failed','reason':'empty'}]}
         atomic(directory/'quality.json',report)
-        fd=os.open(os.devnull,os.O_RDONLY)
+        fd=self.panel.worker_lock()
         with patch.object(panel_worker.studio,'BASE_DIR',self.root),patch.object(sys,'argv',['worker',str(receipt),str(fd)]), \
              patch.object(panel_worker,'execute',side_effect=ValueError('全部动作精简失败')), \
              patch.object(panel_worker.studio,'progress_read',return_value={'job':str(directory)}), \
@@ -246,7 +247,7 @@ class PanelTests(unittest.TestCase):
         directory=self.root/'.local/jobs/old-job';atomic(directory/'quality.json',old)
         with patch.object(progress,'BASE_DIR',self.root):
             progress.update('hero','validate','old',job=str(directory))
-            fd=os.open(os.devnull,os.O_RDONLY)
+            fd=self.panel.worker_lock()
             with patch.object(panel_worker.studio,'BASE_DIR',self.root),patch.object(sys,'argv',['worker',str(receipt),str(fd)]), \
                  patch.object(panel_worker,'execute',side_effect=ValueError('来源已变化')),patch.object(panel_worker.traceback,'print_exc'):
                 self.assertEqual(panel_worker.main(),1)

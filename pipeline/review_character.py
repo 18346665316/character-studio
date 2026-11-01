@@ -1,4 +1,6 @@
 """Stage verified character assets in a neutral animation inspection viewer."""
+from task_lock import serialized
+import studio_core as studio
 import json
 from pathlib import Path
 import shutil
@@ -44,9 +46,9 @@ def verified_batch(root, character, batch, digest):
     return receipt, selected, inspection
 
 
+@serialized(lambda *args, **kwargs: studio.BASE_DIR)
 @track_failures
 def review(character, batch, capture_only=False, equipment_editor=None, heading_file=None):
-    import studio_core as studio
     character, batch = studio.slug(character), studio.slug(batch)
     root = studio.BASE_DIR
     update(character, 'validate', '正在检查指定人物动作的来源、贴图、蒙皮和骨骼', batch=batch)

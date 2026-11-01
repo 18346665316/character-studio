@@ -90,3 +90,10 @@ def check_bound_skeleton(info, reference):
 def check_motion(info):
     if not any(a.get('changing_tracks', 0) > 0 for a in info.get('animations', [])):
         raise ValueError('下载文件没有有效动态轨道，拒绝作为动作使用')
+
+
+def check_animation(info, reference):
+    """Identical acceptance rules for fresh downloads and resumed batch files."""
+    check_mesh_identity(info, reference)
+    check_bound_skeleton(info, reference)
+    check_motion(info)

@@ -1,4 +1,5 @@
 """Immutable Blender optimization experiments before Mixamo binding."""
+from task_lock import serialized
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ def compare(reference,candidate,size):
             'rgb_mae':float(abs(ca-cb)[union].mean()) if union.any() else 0}
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def optimize(root,character,prepared_id,source_fingerprint):
     root=Path(root);ws=root/'workspaces'/character
     source=ws/'models/prepared'/prepared_id
@@ -75,6 +77,7 @@ def optimize(root,character,prepared_id,source_fingerprint):
     return destination
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def activate(root,character,experiment,variant):
     root=Path(root);ws=root/'workspaces'/character
     folder=ws/'models/optimizations'/experiment

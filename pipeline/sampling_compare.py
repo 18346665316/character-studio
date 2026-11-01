@@ -59,7 +59,7 @@ def write_review(job,report,outputs):
 
 
 def compare(job):
-    from panel import atomic
+    from asset_repository import atomic
     from pixel_finish import finish_batch
     from studio_core import GODOT
     report=json.loads((job/'report.json').read_text());probes=json.loads((job/'probe.json').read_text())

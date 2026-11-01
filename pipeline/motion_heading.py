@@ -1,4 +1,5 @@
 """Source-hash keyed heading calibration shared by previews and both renderers."""
+from task_lock import serialized
 import json
 import math
 import shutil
@@ -29,8 +30,9 @@ def records(root, character, files):
     return result
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def save(root, character, sha, record):
-    from panel import atomic
+    from asset_repository import atomic
     directory = root/'workspaces'/character/'motion_heading'
     directory.mkdir(parents=True, exist_ok=True)
     value = {**record, 'source_sha256':sha, 'schema':1}

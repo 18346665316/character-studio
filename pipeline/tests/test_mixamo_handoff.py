@@ -117,6 +117,7 @@ class Handoff(unittest.TestCase):
              patch.object(controller, 'open_profile', return_value=(context, page)) as profile, \
              patch.object(controller, 'modal_open', side_effect=[True, False, False]), \
              patch.object(controller, 'source_geometry', return_value={'triangles': 100, 'mesh_names': []}), \
+             patch.object(controller, 'login_credentials', return_value=True), \
              patch.object(controller, 'save_download', side_effect=save), \
              patch.object(controller, 'inspect_download', return_value=info):
             controller.action_upload(self.source, 'hero')

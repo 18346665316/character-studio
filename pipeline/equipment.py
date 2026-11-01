@@ -1,4 +1,6 @@
 """Versioned one-hand annotations, pinned to a character and verified rig; batches retain review provenance."""
+from task_lock import serialized
+import studio_core as studio
 import json
 import math
 from pathlib import Path
@@ -43,7 +45,6 @@ def validate(config):
 
 
 def load(root, character, batch, equipment_id):
-    import studio_core as studio
     studio.slug(character)
     if batch is not None: studio.slug(batch)
     studio.slug(equipment_id)
@@ -66,8 +67,8 @@ def load(root, character, batch, equipment_id):
     return config
 
 
+@serialized(lambda *args, **kwargs: studio.BASE_DIR)
 def edit(character,batch,equipment_id=None,weapon_id=None):
-    import studio_core as studio
     from mixamo_state import require_ready
     from review_character import review
     root=studio.BASE_DIR

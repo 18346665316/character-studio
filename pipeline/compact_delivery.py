@@ -1,15 +1,16 @@
 """Independent compression of published pixel sheets; immutable input deliveries."""
+from task_lock import serialized
 import json
 import shutil
 from pathlib import Path
-from panel import Panel,atomic,name
+from asset_repository import AssetRepository,atomic,name
 import studio_core as studio
 
 
 def plan(root,character,delivery,clips):
-    panel=Panel(root);name(character);name(delivery)
-    directory=panel.scoped(f'deliverables/{character}/{delivery}',f'deliverables/{character}')
-    manifest_path=panel.scoped(f'deliverables/{character}/{delivery}/manifest.json',f'deliverables/{character}/{delivery}')
+    assets=AssetRepository(root);name(character);name(delivery)
+    directory=assets.scoped(f'deliverables/{character}/{delivery}',f'deliverables/{character}')
+    manifest_path=assets.scoped(f'deliverables/{character}/{delivery}/manifest.json',f'deliverables/{character}/{delivery}')
     data=json.loads(manifest_path.read_text())
     if data.get('source',{}).get('character')!=character or data.get('source',{}).get('kind')=='sequence':
         raise ValueError('请选择本人物的普通动作图集')
@@ -20,12 +21,13 @@ def plan(root,character,delivery,clips):
         name(clip);filename=clip+'_spritesheet.png';info=data.get(filename)
         if not isinstance(info,dict) or info.get('timing_mode')=='variable':
             raise ValueError('缺少完整采样图集，不能对精简结果再次累积压缩')
-        path=panel.scoped(str((directory/filename).relative_to(panel.root)),f'deliverables/{character}/{delivery}')
+        path=assets.scoped(str((directory/filename).relative_to(assets.root)),f'deliverables/{character}/{delivery}')
         if not path.is_file():raise ValueError('原图集不存在')
-        hashes[filename]=panel.digest(path)
-    return {'delivery':delivery,'clips':clips,'manifest_sha256':panel.digest(manifest_path),'sheet_sha256':hashes}
+        hashes[filename]=assets.digest(path)
+    return {'delivery':delivery,'clips':clips,'manifest_sha256':assets.digest(manifest_path),'sheet_sha256':hashes}
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def run(root,character,pinned):
     root=Path(root);directory=root/'deliverables'/character/pinned['delivery']
     if plan(root,character,pinned['delivery'],pinned['clips'])!=pinned:
@@ -70,7 +72,7 @@ def run(root,character,pinned):
     # Preserve equipment snapshots carried by the original delivery.
     for filename in ('equipment.json','equipment_usage.json'):
         if (directory/filename).is_file():
-            source=Panel(root).scoped(str((directory/filename).relative_to(root)),f'deliverables/{character}/{pinned["delivery"]}')
+            source=AssetRepository(root).scoped(str((directory/filename).relative_to(root)),f'deliverables/{character}/{pinned["delivery"]}')
             shutil.copy2(source,staging/filename)
     destination=root/'deliverables'/character/job_id;staging.rename(destination)
     studio.progress_update(character,'complete',f'精简完成：通过 {counts["passed"]}，需复核 {counts["review"]}，失败 {counts["failed"]}；原图集保留',status='complete',output=str(destination),job=str(job))

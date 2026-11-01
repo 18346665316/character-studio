@@ -1,4 +1,5 @@
 """Import self-contained, unrigged textured GLB without image reconstruction."""
+from task_lock import serialized
 import json
 from pathlib import Path
 import shutil
@@ -26,6 +27,7 @@ def validate_glb(content):
     return doc
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def import_character(root,character,source,up='Y',yaw=0):
     root=Path(root);source=Path(source);validate_glb(source.read_bytes())
     scene=trimesh.load(source,force='scene',process=False)

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from panel import Panel,atomic
+from asset_repository import AssetRepository,atomic
 from sequence_render import make_plan,render
 import studio_core as studio
 
@@ -15,7 +15,7 @@ import studio_core as studio
 class SequenceRenderTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name);self.panel=Panel(self.root)
+        self.root=Path(self.temp.name);self.panel=AssetRepository(self.root)
         (self.root/'workspaces/hero').mkdir(parents=True)
         self.c={'rig':{'ready':True},'deliveries':[]}
         atomic(self.root/'.local/mixamo/hero/state.json',{'bound_sha256':'rig-one'})
@@ -26,7 +26,7 @@ class SequenceRenderTests(unittest.TestCase):
             atomic(self.root/f'deliverables/hero/d{i}/manifest.json',{'source':{'files':{'attack.fbx':sha}}})
             self.c['deliveries'].append({'id':f'd{i}','batch':f'b{i}','clips':[{'name':'attack'}]})
         self.recipe={'sources':['d1/attack','d0/attack','d1/attack'],'renderer':'godot','view':'front','frame_size':128,'supersample':4,'equipment_id':None}
-        self.mock=patch.object(Panel,'character',return_value=self.c);self.mock.start();self.addCleanup(self.mock.stop)
+        self.mock=patch.object(AssetRepository,'sequence_inputs',return_value=self.c);self.mock.start();self.addCleanup(self.mock.stop)
         self.patch=patch.object(studio,'BASE_DIR',self.root);self.patch.start();self.addCleanup(self.patch.stop)
 
     def test_same_named_actions_are_pinned_without_collision(self):

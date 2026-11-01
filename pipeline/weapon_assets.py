@@ -1,6 +1,7 @@
 """Independent, immutable weapon assets. Model basis: +Y tip, +Z face, length=1.
 Calibration is explicit; no character normalization or component removal is used.
 """
+from task_lock import serialized
 import argparse
 import hashlib
 import json
@@ -55,6 +56,7 @@ def validate_calibration(length, grip):
         raise ValueError('握点超出武器范围')
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def calibrate(root, identity, length, grip):
     data=load(root,identity)
     validate_calibration(length,grip)
@@ -69,6 +71,7 @@ def calibrate(root, identity, length, grip):
     return data
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def create(root, source, display_name, image=None):
     """Import raw TSR OBJ from the tested upright image. Does not claim inferred real size."""
     import numpy as np
@@ -134,6 +137,7 @@ def prepare_white_background(source, destination):
     return destination
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def generate(root, source, display_name, job):
     """White-background upright sword MVP. Retain reconstruction and every component."""
     import os

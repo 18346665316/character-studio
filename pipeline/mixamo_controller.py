@@ -1,4 +1,5 @@
 """Mixamo human-assisted rigging and verified downloads, with one profile per character."""
+from task_lock import serialized
 import argparse
 from contextlib import contextmanager
 import fcntl
@@ -13,8 +14,8 @@ import uuid
 from playwright.sync_api import sync_playwright
 from progress import update as progress_update
 from asset_inspector import inspect_download, source_geometry
-from mixamo_state import (character_name, check_mesh_identity, check_motion, file_hash,
-                          read_state, require_ready, state_path, write_state, MeshIdentityError, check_bound_skeleton)
+from mixamo_state import (character_name, check_mesh_identity, file_hash,
+                          read_state, require_ready, state_path, write_state, MeshIdentityError, check_animation)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_FILE = BASE_DIR / '.local/auth/mixamo_session.json'
@@ -80,9 +81,21 @@ def open_profile(playwright, character, visible):
     return context, page
 
 
+def login_credentials(context):
+    """A public Mixamo page can show Upload Character without being signed in."""
+    for origin in context.storage_state().get('origins',[]):
+        if origin.get('origin') == 'https://www.mixamo.com':
+            values = {v.get('name'):v.get('value') for v in origin.get('localStorage',[])}
+            if all(isinstance(values.get(k),str) and values[k] not in ('','null','undefined')
+                   for k in ('access_token','guid')):
+                return True
+    return False
+
+
 def save_shared_login(context):
     """Share login credentials only; never copy character/settings storage."""
     import tempfile
+    if not login_credentials(context): return
     cookies = [c for c in context.cookies() if adobe_cookie(c)]
     origins=[]
     for origin in context.storage_state().get('origins',[]):
@@ -127,7 +140,7 @@ def safe_error(exc):
     text=re.sub(r'https?://[^\s"<>]+',lambda m:m.group(0).split('?')[0].split('#')[0],text)
     text=re.sub(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?','[redacted token]',text)
     if 'Target page, context or browser has been closed' in text:
-        return 'Mixamo 浏览器已关闭，尚未完成登录或绑定。请重新打开绑定窗口并登录 Adobe。'
+        return 'Mixamo 页面或浏览器已关闭，请重新打开绑定窗口。关闭异常本身不代表登录过期。'
     return text
 
 
@@ -137,9 +150,9 @@ def wait_for_login(context,page,character=None,timeout=360):
     while time.monotonic()-started<timeout:
         if page.is_closed():raise ValueError('Mixamo 浏览器已关闭，尚未完成登录。请重新打开绑定窗口。')
         try:
-            if upload.is_visible():
+            if upload.is_visible() and login_credentials(context):
                 save_shared_login(context)
-                if character:progress_update(character,'rig','登录已恢复，继续上传人物')
+                if character:progress_update(character,'rig','登录凭据与操作入口已就绪，继续上传人物')
                 return upload
             url=page.url
             if not shared_tried and time.monotonic()-started >= 8:
@@ -156,9 +169,7 @@ def wait_for_login(context,page,character=None,timeout=360):
                 reset=True
                 context.clear_cookies()
                 if 'mixamo.com' in url:
-                    page.evaluate('() => { localStorage.clear(); sessionStorage.clear(); }')
-                # Clear stale Mixamo storage on the next document too, once only.
-                page.add_init_script("if(location.hostname==='www.mixamo.com'&&!sessionStorage.getItem('studioAuthReset')){localStorage.clear();sessionStorage.setItem('studioAuthReset','1');}")
+                    page.evaluate('() => { localStorage.removeItem("access_token"); localStorage.removeItem("guid"); }')
                 page.goto(MIXAMO_URL,wait_until='domcontentloaded')
             if not announced:
                 announced=True
@@ -172,6 +183,7 @@ def wait_for_login(context,page,character=None,timeout=360):
     raise ValueError('等待 Adobe 登录超过6分钟，请重新打开绑定窗口并登录')
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 def action_login():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, **browser_options(p))
@@ -254,6 +266,7 @@ PANEL = '''({character, status, enabled}) => {
 }'''
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 def action_upload(model, character):
     character_name(character)
     source = Path(model).resolve()
@@ -265,6 +278,7 @@ def action_upload(model, character):
         write_state(character, 'opening_browser', **fields)
         progress_update(character, 'rig', '正在打开 Mixamo 并上传指定角色')
         context = None
+        operation = '打开浏览器'
         try:
             reference = source_geometry(source)
             context, page = open_profile(p, character, visible=True)
@@ -273,9 +287,13 @@ def action_upload(model, character):
             page.goto(MIXAMO_URL, wait_until='domcontentloaded')
             print('请在可见 Mixamo 窗口确认朝向、放置关节点、完成绑定，并检查角色与变形。', flush=True)
             print('完成网页向导后，点击左下角 Studio 的确认按钮；关闭窗口将取消本次绑定。', flush=True)
+            operation = '登录检查'
             upload = wait_for_login(context,page,character)
+            operation = '打开人物上传入口'
             upload.click()
+            operation = '上传人物文件'
             page.locator('input[type="file"]').set_input_files(str(source))
+            operation = '人工摆点与绑定验收'
             write_state(character, 'waiting_for_markers', **fields)
             started = time.monotonic()
             last_status = None
@@ -307,6 +325,7 @@ def action_upload(model, character):
                 page.wait_for_timeout(500)
             if modal_open(page):
                 raise ValueError('Mixamo 绑定向导尚未结束，不能登记成功')
+            operation = '下载并校验绑定模型'
             progress_update(character, 'rig', '已收到确认，正在下载绑定模型并验证贴图、骨骼与网格')
             fields['human_reviewed'] = True
             write_state(character, 'verifying_bound_model', **fields)
@@ -329,10 +348,12 @@ def action_upload(model, character):
             progress_update(character, 'rig', '人工绑定、贴图和网格检查通过')
             print(f'人工验收及网格检查通过。绑定模型已保存: {bound}', flush=True)
         except BaseException as exc:
-            progress_update(character, 'rig', safe_error(exc), status='failed')
+            reason = operation+'：'+safe_error(exc)
+            progress_update(character, 'rig', reason, status='failed')
             write_state(character, 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed',
-                        **fields, error=safe_error(exc))
-            raise
+                        **fields, error=reason)
+            if isinstance(exc, KeyboardInterrupt): raise
+            raise ValueError(reason) from None
         finally:
             if context:
                 context.close()
@@ -404,6 +425,7 @@ def request_animation(page, anim_name, pending):
     return inspect_download(pending)
 
 
+@serialized(lambda *args, **kwargs: BASE_DIR)
 def action_download(anim_name, output_fbx, character):
     character_name(character)
     output = Path(output_fbx).resolve()
@@ -426,8 +448,7 @@ def action_download(anim_name, output_fbx, character):
                 progress_update(character,'download',f'{anim_name}：正在下载并检查人物、贴图、骨骼和动态轨道',action=anim_name)
                 info=request_animation(page,anim_name,pending)
                 try:
-                    check_mesh_identity(info,state['geometry'])
-                    check_bound_skeleton(info,state['geometry'])
+                    check_animation(info,state['geometry'])
                 except MeshIdentityError as mismatch:
                     if attempt or marker.exists():
                         raise MeshIdentityError(str(mismatch)+'；本任务已尝试自动恢复一次，请到人工绑定恢复并确认本角色，再新建下载任务') from mismatch
@@ -439,7 +460,6 @@ def action_download(anim_name, output_fbx, character):
                     pending.rename(pending.with_name(pending.stem+'-rejected.fbx'))
                     restore_bound_character(page,character,state)
                     continue
-                check_motion(info)
                 current=require_ready(character,allow_cloud_recovery=True)
                 if current['bound_sha256']!=state['bound_sha256']:
                     raise ValueError('下载期间本地绑定版本已变化')

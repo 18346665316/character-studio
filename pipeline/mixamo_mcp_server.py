@@ -3,6 +3,8 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from task_lock import task_lock, child_options
+from asset_repository import atomic
 from mixamo_state import character_name, read_state, write_state, state_path
 
 SESSION_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.local/auth/mixamo_session.json"))
@@ -83,17 +85,20 @@ def handle_request(req):
         elif tool_name == "mixamo_upload_and_rig":
             character = character_name(args["character"])
             fp = str(Path(args["file_path"]).resolve())
-            previous = read_state(character)
-            if previous.get('status') in ('launching', 'opening_browser', 'waiting_for_markers', 'processing_rig', 'waiting_for_review', 'verifying_bound_model'):
-                raise ValueError("This character already has an active rigging handoff")
-            if not Path(fp).is_file():
-                raise ValueError("Model does not exist")
-            write_state(character, "launching", source_model=fp)
-            log_path = state_path(character).parent / 'handoff.log'
-            with log_path.open('w') as log:
-                process = subprocess.Popen([PYTHON_BIN, "-u", CONTROLLER_SCRIPT, "upload", fp,
-                                            "--character", character], stdout=log, stderr=subprocess.STDOUT,
-                                           stdin=subprocess.DEVNULL, start_new_session=True)
+            with task_lock(Path(CONTROLLER_SCRIPT).parent.parent):
+                previous = read_state(character)
+                if not Path(fp).is_file():
+                    raise ValueError("Model does not exist")
+                try:
+                    write_state(character, "launching", source_model=fp)
+                    log_path = state_path(character).parent / 'handoff.log'
+                    with log_path.open('w') as log:
+                        process = subprocess.Popen([PYTHON_BIN, "-u", CONTROLLER_SCRIPT, "upload", fp,
+                                                    "--character", character], stdout=log, stderr=subprocess.STDOUT,
+                                                   stdin=subprocess.DEVNULL, start_new_session=True, **child_options())
+                except BaseException:
+                    atomic(state_path(character), previous)
+                    raise
             return {"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": json.dumps({
                 "status": "launching", "pid": process.pid, "character": character,
                 "log": str(log_path), "message": "Place markers in the visible browser and use the Studio confirmation button after reviewing the rig. Poll mixamo_rig_status; this is not binding success."
@@ -104,7 +109,8 @@ def handle_request(req):
         elif tool_name == "mixamo_download_animation":
             anim = args.get("animation_name")
             out = args.get("output_path")
-            res = subprocess.run([PYTHON_BIN, CONTROLLER_SCRIPT, "download", anim, out, "--character", character_name(args["character"])], capture_output=True, text=True)
+            with task_lock(Path(CONTROLLER_SCRIPT).parent.parent):
+                res = subprocess.run([PYTHON_BIN, CONTROLLER_SCRIPT, "download", anim, out, "--character", character_name(args["character"])], capture_output=True, text=True, **child_options())
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
