@@ -75,6 +75,39 @@ class TerrainReviewFixes(unittest.TestCase):
         self.assertEqual(fields['image[]'],b'example-png')
         self.assertEqual(fields['model'],b'gpt-image-2')
 
+    def test_http_errors_preserve_safe_details_and_redact_credentials(self):
+        from urllib.error import HTTPError
+        from terrain_images import SubmissionRejected
+        client=Provider.__new__(Provider)
+        client.base='https://example.com/v1';client.key='private-test-key'
+        client.audit_path=self.root/'http.jsonl'
+        body=json.dumps({'error':{'type':'invalid_request_error','code':'bad_image',
+            'message':'Unsupported image[] private-test-key Bearer another-secret',
+            'data':'private-image','Authorization':'hidden'}}).encode()
+        error=HTTPError(client.base+'/images/edits',400,'Bad Request',{'x-request-id':'trace'},BytesIO(body))
+        with patch.object(client,'opener',create=True) as opener:
+            opener.open.side_effect=error
+            with self.assertRaisesRegex(SubmissionRejected,r'Unsupported image\[\]') as caught:
+                client.request('/images/edits',b'payload')
+        raw=client.audit_path.read_text()+str(caught.exception)
+        for private in ('private-test-key','another-secret','private-image','hidden'):
+            self.assertNotIn(private,raw)
+        event=json.loads(client.audit_path.read_text().splitlines()[-1])
+        self.assertEqual(event['response']['error']['code'],'bad_image')
+        self.assertEqual(event['response']['error']['type'],'invalid_request_error')
+        self.assertEqual(event['request_id'],'trace')
+
+    def test_error_bodies_are_bounded_and_non_json_is_not_exposed(self):
+        client=Provider.__new__(Provider);client.key='placeholder'
+        class Limited(BytesIO):
+            def read(self,size=-1):
+                self.requested=size
+                return super().read(size)
+        large=Limited(b'x'*50000)
+        self.assertIn('16KB',client.error_detail(large)['message'])
+        self.assertEqual(large.requested,16*1024+1)
+        self.assertEqual(client.error_detail(BytesIO(b'<html>private proxy page</html>')), {})
+
     def test_config_file_rotation_removal_and_environment_precedence(self):
         with patch.dict(os.environ,{},clear=True):
             file=self.root/'.env'

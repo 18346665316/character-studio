@@ -93,6 +93,28 @@ class Provider:
             raise ValueError('未配置图像 API Key，请设置环境变量后重启 Studio')
         self.opener = build_opener(NoRedirect())
 
+    def error_detail(self, exc):
+        """Read a bounded JSON error, retaining only safe diagnostic fields."""
+        try:
+            raw=exc.read(16*1024+1)
+            if len(raw)>16*1024: return {'message':'错误响应超过16KB，未保留正文'}
+            result=json.loads(raw)
+            value=result.get('error',result) if isinstance(result,dict) else None
+            if isinstance(value,str): value={'message':value}
+            if not isinstance(value,dict): return {}
+            detail={}
+            for key in ('type','code','message'):
+                text=value.get(key)
+                if not isinstance(text,(str,int)) or isinstance(text,bool): continue
+                text=str(text).replace(self.key,'[REDACTED]')
+                text=re.sub(r'Bearer\s+[^\s"\']+','Bearer [REDACTED]',text,flags=re.I)
+                text=re.sub(r'(?i)(api[_-]?key\s*[:=]\s*)[^\s,;]+',r'\1[REDACTED]',text)
+                text=re.sub(r'[A-Za-z0-9+/=_-]{128,}','[LONG DATA REDACTED]',text)
+                detail[key]=text[:512]
+            return detail
+        except (OSError,ValueError,UnicodeError):
+            return {}
+
     def audit(self, **event):
         """Local transport evidence only: never record credentials or image bytes."""
         if not self.audit_path: return
@@ -132,7 +154,9 @@ class Provider:
                                request_id=response.headers.get('x-request-id') or response.headers.get('request-id'),**evidence)
                     return result
             except HTTPError as exc:
+                detail={} if exc.code in (301,302,303,307,308) else self.error_detail(exc)
                 self.audit(event='http_error',http_status=exc.code,
+                           response={'error':detail},
                            request_id=exc.headers.get('x-request-id') or exc.headers.get('request-id'),**evidence)
                 if binary and exc.code in (301, 302, 303, 307, 308):
                     from urllib.parse import urljoin
@@ -143,7 +167,8 @@ class Provider:
                     url = target
                     continue
                 error = SubmissionRejected if exc.code in (400, 401, 403, 404, 405, 413, 422, 429) else ValueError
-                raise error(f'图片服务 HTTP {exc.code}，请检查额度、凭据或稍后继续任务') from None
+                reason=detail.get('message') or detail.get('code') or detail.get('type')
+                raise error(f'图片服务 HTTP {exc.code}'+('：'+reason if reason else '，请检查额度、凭据或稍后继续任务')) from None
             except (URLError, TimeoutError, OSError):
                 self.audit(event='connection_error',**evidence)
                 raise ValueError('图片服务连接中断；已记录的远程任务可继续查询') from None
