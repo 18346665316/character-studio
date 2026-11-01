@@ -33,6 +33,16 @@ class CompactDelivery(unittest.TestCase):
         self.assertTrue((destination/'game/idle.tres').is_file())
         self.assertAlmostEqual(sum(data['idle_spritesheet.png']['game']['frame_durations_seconds']),10/30)
 
+    def test_selected_export_contains_only_playable_chosen_clip(self):
+        import io,zipfile
+        pinned=plan(self.root,'hero','old',['idle','walk'],'balanced')
+        with patch('progress.BASE_DIR',self.root):destination=run(self.root,'hero',pinned)
+        archive=zipfile.ZipFile(io.BytesIO(Panel(self.root).export('hero',destination.name,'idle','game')))
+        self.assertEqual(set(archive.namelist()),{'idle_spritesheet.png','idle_preview.gif','idle_render.json','idle.tres'})
+        timing=json.loads(archive.read('idle_render.json'))
+        self.assertAlmostEqual(sum(timing['frame_durations_seconds']),10/30)
+        with self.assertRaises(ValueError):Panel(self.root).export('hero',destination.name,'../walk','game')
+
     def test_batch_and_identity_and_changed_inputs(self):
         pinned=Panel(self.root).validate_task('hero','compact',{'delivery':'old','clips':['idle','walk']})
         with patch('progress.BASE_DIR',self.root):destination=run(self.root,'hero',pinned)

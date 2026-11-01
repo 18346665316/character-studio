@@ -66,3 +66,19 @@ class CompactFrames(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'时长'):make_preview(self.root/'game.png',self.root/'bad.gif',2,64,r['frame_count'],[1]*r['frame_count'])
 
 if __name__=='__main__':unittest.main()
+
+class CadenceProfiles(unittest.TestCase):
+    setUp=CompactFrames.setUp
+    build=CompactFrames.build
+    def test_jump_presets_preserve_timing_and_equipment_boundaries(self):
+        path,t=self.build([i%35 for i in range(73)])
+        counts=[]
+        for profile in ('smooth','balanced','compact'):
+            result=compact(path,self.root/(profile+'.png'),t,protected=[19,20],profile=profile)
+            counts.append(result['frame_count'])
+            self.assertTrue({0,19,20,72}.issubset(result['source_frame_indices']))
+            self.assertAlmostEqual(sum(result['frame_durations_seconds']),73/30)
+            self.assertEqual(result['compression']['profile'],profile)
+        self.assertGreater(counts[0],counts[1]);self.assertGreater(counts[1],counts[2])
+        self.assertLess(counts[1],45)
+        with self.assertRaises(ValueError):compact(path,self.root/'bad.png',t,profile='unknown')

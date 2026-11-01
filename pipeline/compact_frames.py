@@ -29,13 +29,25 @@ def error(reference, candidate):
     return silhouette,color,local
 
 
-def compact(sheet, destination, timing, protected=()):
+PRESETS = {"smooth":24, "balanced":15, "compact":12}
+
+
+def compact(sheet, destination, timing, protected=(), profile=None):
     size=timing['frame_width'];count=timing['frame_count'];duration=timing['duration_seconds']
     if count<1 or not math.isfinite(duration) or duration<=0:raise ValueError('Invalid animation timing')
     with Image.open(sheet) as source:frames=list(tiles(source.convert('RGBA'),size,count))
+    if profile is not None and profile not in PRESETS: raise ValueError('未知精简程度')
     protected=set(protected)|{0,count-1}
+    candidates=set(range(count))
+    if profile is not None:
+        # Keep source frames and exact original timestamps; never interpolate or retime.
+        target=min(count,max(1,math.ceil(duration*PRESETS[profile]-1e-8)))
+        candidates={min(count-1,int(i*count/target)) for i in range(target)}|protected
     kept=[0];peak=[0.,0.,0.];step=duration/count
     for i in range(1,count):
+        if i not in candidates:
+            peak=[max(a,b) for a,b in zip(peak,error(frames[kept[-1]],frames[i]))]
+            continue
         measured=error(frames[kept[-1]],frames[i])
         limits=(POLICY['silhouette_error'],POLICY['color_error'],POLICY['local_error'])
         if i in protected or (i-kept[-1]+1)*step>POLICY['max_hold_seconds']+1e-8 or any(e>limit for e,limit in zip(measured,limits)):
@@ -49,9 +61,9 @@ def compact(sheet, destination, timing, protected=()):
     return {**timing,'frame_count':len(kept),'columns':cols,'rows':rows,
             'fps':len(kept)/duration,'timing_mode':'variable','frame_durations_seconds':durations,
             'source_frame_indices':kept,'source_frame_count':count,
-            'compression':{'policy':POLICY.copy(),'removed_frames':count-len(kept),
+            'compression':{'profile':profile or 'lossless_hold','target_fps':PRESETS.get(profile),'source_bytes':Path(sheet).stat().st_size,'output_bytes':destination.stat().st_size,'policy':POLICY.copy(),'removed_frames':count-len(kept),
                            'retained_ratio':len(kept)/count,'max_held_error':dict(zip(('silhouette','color','local'),peak)),
-                           'note':'Raster error bounds only; no cycle extraction or artistic guarantee.'}}
+                           'note':'Cadence reduction with original timestamps; visual review required.' if profile else 'Raster error bounds only; no cycle extraction or artistic guarantee.'}}
 
 
 def write_spriteframes(path, sheet_name, timing):

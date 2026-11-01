@@ -239,7 +239,7 @@ def make_preview(sheet, destination, duration_seconds, frame_size=None, frame_co
     frames[0].save(destination, save_all=True, append_images=frames[1:], duration=delays, loop=0)
 
 
-def make_game_version(sheet, timing, quality, equipment_usage=None):
+def make_game_version(sheet, timing, quality, equipment_usage=None, profile="balanced"):
     """Create a reusable game representation from an already finished pixel sheet."""
     from compact_frames import compact,write_spriteframes
     staging=sheet.parent;stem=sheet.name.removesuffix('_spritesheet.png')
@@ -248,7 +248,7 @@ def make_game_version(sheet, timing, quality, equipment_usage=None):
     for event in (equipment_usage or {}).get('clips',{}).get(stem,{}).get('events',[]):
         index=math.ceil(event['at']*timing['frame_count']-1e-8)
         protected.extend((max(0,index-1),min(timing['frame_count']-1,index)))
-    result=compact(sheet,game/sheet.name,timing,protected)
+    result=compact(sheet,game/sheet.name,timing,protected,profile=profile)
     result['quality']=quality
     result['sha256']=digest(game/sheet.name)
     result.update(sheet='game/'+sheet.name,gif='game/'+stem+'_preview.gif',spriteframes='game/'+stem+'.tres')

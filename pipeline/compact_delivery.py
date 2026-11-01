@@ -7,7 +7,9 @@ from asset_repository import AssetRepository,atomic,name
 import studio_core as studio
 
 
-def plan(root,character,delivery,clips):
+def plan(root,character,delivery,clips,profile="balanced"):
+    from compact_frames import PRESETS
+    if profile not in PRESETS: raise ValueError("未知精简程度")
     assets=AssetRepository(root);name(character);name(delivery)
     directory=assets.scoped(f'deliverables/{character}/{delivery}',f'deliverables/{character}')
     manifest_path=assets.scoped(f'deliverables/{character}/{delivery}/manifest.json',f'deliverables/{character}/{delivery}')
@@ -24,19 +26,19 @@ def plan(root,character,delivery,clips):
         path=assets.scoped(str((directory/filename).relative_to(assets.root)),f'deliverables/{character}/{delivery}')
         if not path.is_file():raise ValueError('原图集不存在')
         hashes[filename]=assets.digest(path)
-    return {'delivery':delivery,'clips':clips,'manifest_sha256':assets.digest(manifest_path),'sheet_sha256':hashes}
+    return {'profile':profile,'delivery':delivery,'clips':clips,'manifest_sha256':assets.digest(manifest_path),'sheet_sha256':hashes}
 
 
 @serialized(lambda root, *args, **kwargs: root)
 def run(root,character,pinned):
     root=Path(root);directory=root/'deliverables'/character/pinned['delivery']
-    if plan(root,character,pinned['delivery'],pinned['clips'])!=pinned:
+    if plan(root,character,pinned['delivery'],pinned['clips'],pinned.get('profile','balanced'))!=pinned:
         raise ValueError('原图集或清单已变化，请重新创建精简任务')
     data=json.loads((directory/'manifest.json').read_text());job_id=studio.new_batch()
     job=root/'.local/jobs'/job_id;staging=job/'staging';staging.mkdir(parents=True)
     studio.progress_update(character,'validate','正在精简已有图集，无需重新渲染',job=str(job))
     result={k:v for k,v in data.items() if not k.endswith('_spritesheet.png') and k!='quality_report'}
-    result['operation']={'type':'compact','source_delivery':pinned['delivery'],'source_manifest_sha256':pinned['manifest_sha256']}
+    result['operation']={'type':'compact','profile':pinned.get('profile','balanced'),'source_delivery':pinned['delivery'],'source_manifest_sha256':pinned['manifest_sha256']}
     results=[]
     for clip in pinned['clips']:
         filename=clip+'_spritesheet.png';original=data[filename]
@@ -48,7 +50,7 @@ def run(root,character,pinned):
             quality=studio.validate_sheet(staging/filename,original['frame_width'],original['frame_count'],allow_small=True)['quality']
             timing={k:v for k,v in original.items() if k not in ('game','quality','sha256','unique_frames')}
             timing.setdefault('fps',timing['frame_count']/timing['duration_seconds'])
-            game=studio.make_game_version(staging/filename,timing,quality,(data.get('equipment') or {}).get('usage'))
+            game=studio.make_game_version(staging/filename,timing,quality,(data.get('equipment') or {}).get('usage'),profile=pinned.get('profile','balanced'))
             result[filename]={**original,'quality':quality,'game':game}
             atomic(staging/(clip+'_render.json'),timing)
             studio.make_preview(staging/filename,staging/(clip+'_preview.gif'),timing['duration_seconds'],timing['frame_width'],timing['frame_count'])

@@ -140,7 +140,7 @@ class Panel(AssetRepository):
             clean={'recipe':plan['recipe'],'plan':plan}
         if action == 'compact':
             from compact_delivery import plan
-            clean=plan(self.root,character,params.get('delivery'),params.get('clips'))
+            clean=plan(self.root,character,params.get('delivery'),params.get('clips'),params.get('profile','balanced'))
             if params.get('manifest_sha256') and clean!=params:
                 raise ValueError('原图集已变化，请重新创建精简任务')
         if action == 'weapon':
@@ -351,12 +351,26 @@ class Panel(AssetRepository):
         atomic(self.scoped(f'workspaces/{character}/sequence.json',f'workspaces/{character}'),record)
         return {'ok':True,'sequence':record}
 
-    def export(self, character, delivery):
+    def export(self, character, delivery, clip=None, variant=None):
         character, delivery = name(character), name(delivery)
         directory = self.scoped(f'deliverables/{character}/{delivery}', f'deliverables/{character}')
         manifest = read(directory/'manifest.json',{})
         if manifest.get('source',{}).get('character') != character:
             raise ValueError('交付目录无有效清单')
+        if variant is not None:
+            if variant not in ('game','source'): raise ValueError('未知导出版本')
+            name(clip)
+            info=manifest.get(clip+'_spritesheet.png')
+            if not info or (variant=='game' and not info.get('game')): raise ValueError('版本不存在')
+            folder=directory/'game' if variant=='game' else directory
+            names=[clip+'_spritesheet.png',clip+'_preview.gif',clip+'_render.json']
+            if variant=='game': names.append(clip+'.tres')
+            buffer=BytesIO()
+            with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
+                for filename in names:
+                    path=self.scoped(str((folder/filename).relative_to(self.root)),f'deliverables/{character}/{delivery}')
+                    if path.is_file(): archive.write(path,filename)
+            return buffer.getvalue()
         buffer = BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
             for path in directory.rglob('*'):
@@ -408,7 +422,7 @@ def handler(panel):
                 if parsed.path == '/api/state':
                     with panel.mutex:
                         panel.recover_jobs()
-                        result = {'api_version':18,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
+                        result = {'api_version':19,'token':panel.token,'characters':panel.catalog(),'jobs':panel.jobs()}
                         from weapon_assets import catalog as weapon_catalog
                         result['weapons']=[{**w,'front':panel.asset(panel.root/'weapons'/w['id']/'front.png'),'contact':panel.asset(panel.root/'weapons'/w['id']/'contact.png')} for w in weapon_catalog(panel.root)]
                         if query.get('character'):
@@ -432,7 +446,7 @@ def handler(panel):
                     path = panel.asset_path(unquote(parsed.path[len('/asset/'):]))
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
                 if parsed.path == '/api/export':
-                    content = panel.export(query.get('character',[''])[0],query.get('delivery',[''])[0])
+                    content = panel.export(query.get('character',[''])[0],query.get('delivery',[''])[0],query.get('clip',[None])[0],query.get('variant',[None])[0])
                     return self.respond(content,'application/zip')
                 return self.respond({'error':'页面不存在'},code=404)
             except (ValueError,KeyError,OSError) as exc:
