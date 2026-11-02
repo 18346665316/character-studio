@@ -1,7 +1,6 @@
-<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · 素材库</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/studio.css"><script src="/navigation.js" defer></script><script src="/hub.js" defer></script></head>
-<body><nav id="studio-navigation" aria-label="主导航"></nav>
-<main class="studio-hub"><header class="hub-heading"><div><span class="eyebrow">PIXEL ANIMATION STUDIO</span><h1 id="hub-title">素材库</h1><p id="hub-description">查看已有素材，继续调整或导出。</p></div><a id="hub-create" class="hub-primary" href="/?view=create">＋ 制作素材</a></header>
-<nav id="hub-categories" class="hub-filters" aria-label="资产分类"></nav>
-<div class="hub-tools"><label class="hub-search">搜索<input id="hub-search" type="search" placeholder="搜索名称或编号"></label><label id="hub-status-label" hidden>任务状态<select id="hub-status"><option value="all">全部状态</option><option value="active">进行中</option><option value="failed">需要处理</option><option value="done">已完成</option></select></label><span id="hub-count" role="status"></span><button id="hub-refresh" type="button">刷新</button></div>
-<p id="hub-message" role="status">正在读取素材…</p><section id="hub-content" class="hub-grid" aria-label="素材列表"></section></main></body></html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · 素材项目</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/studio.css"><script src="/navigation.js" defer></script><script src="/hub.js" defer></script></head><body>
+<nav id="studio-navigation" aria-label="主导航"></nav>
+<main class="studio-hub project-workspace"><header class="hub-heading"><div><span class="eyebrow">GAME ASSET STUDIO</span><h1 id="hub-title">素材项目</h1><p id="hub-description">围绕同一个游戏或同一种风格，生产、验收并交付整套素材。</p></div><div class="project-actions"><button id="project-refresh" type="button">刷新进度</button><a id="project-switch" href="/?view=projects">切换素材项目</a></div></header>
+<p id="hub-message" role="status"></p><section id="project-content" aria-label="项目工作区"></section>
+<dialog id="asset-picker"><form method="dialog"><button aria-label="关闭素材选择">关闭</button></form><h2>为清单项挑选已有成果</h2><p>选用会保存当前版本的快照；不改写原素材。</p><input id="asset-search" type="search" placeholder="搜索已有成果"><div id="asset-options" class="hub-grid"></div></dialog>
+</main></body></html>

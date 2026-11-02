@@ -68,6 +68,21 @@ class GoogleImagesTests(unittest.TestCase):
             self.assertNotIn('private-oauth-token',str(result.exception));client.opener.open.assert_called_once()
             self.assertNotIn('secret-image',client.audit_path.read_text())
 
+    def test_request_spacing_and_429_cooldown_persist_across_clients(self):
+        first=self.client();first.root=self.root
+        with patch('google_images.time.time',return_value=100):first.pace()
+        state=self.root/'.local/google-images/pacing.json'
+        self.assertEqual(read(state)['next_request_at'],130)
+        second=self.client();second.root=self.root
+        with patch('google_images.time.time',side_effect=[110,130,130]),patch('google_images.time.sleep') as sleep:
+            second.pace()
+        sleep.assert_called_once_with(20)
+        second.opener.open.side_effect=HTTPError(second.base,429,'limited',{'Retry-After':'120'},BytesIO(b'private'))
+        with patch('google_images.time.time',return_value=200):
+            with self.assertRaisesRegex(SubmissionRejected,'冷却'):second.create('style',[])
+        self.assertEqual(read(state)['next_request_at'],320)
+        second.opener.open.assert_called_once()
+
     def test_timeout_is_uncertain_without_paid_retries(self):
         client=self.client();client.opener.open.side_effect=URLError('private-oauth-token')
         with self.assertRaisesRegex(ValueError,'结果不明') as error:client.create('style',[self.image])

@@ -7,6 +7,8 @@ import base64
 from io import BytesIO
 import json
 import re
+import time
+import math
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
@@ -48,6 +50,7 @@ class GoogleProvider:
     def __init__(self, config, root, audit_path=None):
         from terrain_images import NoRedirect
         spec = settings(config, root)
+        self.root = Path(root)
         self.base, self.model = spec['base'], spec['model']
         self.provider = 'google_cloud'; self.audit_path = Path(audit_path) if audit_path else None
         try:
@@ -76,6 +79,23 @@ class GoogleProvider:
             with self.audit_path.open('a', encoding='utf-8') as output: output.write(json.dumps(event,ensure_ascii=False)+'\n')
         except OSError: pass
 
+    def pace(self, cooldown=None):
+        # All production callers hold the shared worker lease; persisted across workers.
+        root=getattr(self,'root',None)
+        if root is None: return
+        from asset_repository import read,atomic
+        path=root/'.local/google-images/pacing.json'
+        state=read(path,{})
+        if cooldown is not None:
+            atomic(path,dict(next_request_at=max(state.get('next_request_at',0),time.time()+cooldown)))
+            return
+        delay=max(0,state.get('next_request_at',0)-time.time())
+        if delay:
+            self.audit(event='rate_limit_wait',seconds=math.ceil(delay))
+            while delay>0:
+                time.sleep(min(delay,30));delay=max(0,state.get('next_request_at',0)-time.time())
+        atomic(path,dict(next_request_at=time.time()+30))
+
     def create(self, prompt, images):
         from terrain_images import SubmissionRejected
         parts = [{'text': prompt}]
@@ -93,6 +113,7 @@ class GoogleProvider:
         body = json.dumps(payload).encode()
         endpoint=self.base+':generateContent'
         event=dict(method='POST',endpoint=endpoint,payload_bytes=len(body),content_type='application/json')
+        self.pace()
         self.audit(event='request',**event)
         request=Request(endpoint, data=body, headers={'Authorization':'Bearer '+self.credentials.token,
                         'Content-Type':'application/json','Accept':'application/json'})
@@ -105,6 +126,11 @@ class GoogleProvider:
                     request_id=response.headers.get('x-request-id'),response={'model':self.model,'status':'responded'},**event)
         except HTTPError as error:
             self.audit(event='http_error',http_status=error.code,response={'model':self.model,'error':'HTTP '+str(error.code)},**event)
+            if error.code==429:
+                try: cooldown=max(60,min(900,int((error.headers or {}).get('Retry-After','60'))))
+                except (ValueError,TypeError): cooldown=60
+                self.pace(cooldown)
+                raise SubmissionRejected('Google Cloud HTTP 429：请求被限流，后续请求将等待冷却；本次未自动重试，可稍后手动继续') from None
             # Never expose server bodies, signed credentials, input data or tokens.
             cls=SubmissionRejected if error.code in (400,401,403,404,405,413,422,429) else ValueError
             raise cls('Google Cloud 图片服务 HTTP '+str(error.code)+'；请检查模型区域、Vertex AI权限、配额和账单') from None
@@ -125,7 +151,10 @@ class GoogleProvider:
                     with Image.open(BytesIO(decoded)) as image: image.verify()
                 except (ValueError,TypeError,OSError): raise ValueError('Google Cloud 返回的图片数据无效；不会自动重试') from None
                 return {'data':[{'b64_json':content}]}
-        self.audit(event='no_image',response={'model':self.model,'status':'no_image'},**event)
+        reasons=[c.get('finishReason') for c in (result.get('candidates') or []) if isinstance(c,dict)]
+        allowed={'STOP','MAX_TOKENS','SAFETY','RECITATION','OTHER','BLOCKLIST','PROHIBITED_CONTENT','IMAGE_SAFETY','IMAGE_PROHIBITED_CONTENT','NO_IMAGE'}
+        safe_reasons=[r for r in reasons if isinstance(r,str) and r in allowed]
+        self.audit(event='no_image',response={'model':self.model,'status':'no_image','finish_reasons':safe_reasons},**event)
         raise SubmissionRejected('Google Cloud 已响应但没有图片，可能被过滤或模型不支持生图；未自动重试')
 
     def request(self, *args, **kwargs):

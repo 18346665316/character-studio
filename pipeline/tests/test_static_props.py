@@ -46,6 +46,33 @@ class StaticPropTests(unittest.TestCase):
         self.assertEqual(output.getpixel((60,60)),(255,0,255,255)) # Interior hole deliberately not inferred.
         self.assertEqual(info['method'],'border_connected_magenta_key')
 
+    def test_reserved_ai_key_cleans_holes_and_dark_spill_without_affecting_imports(self):
+        source=Image.new('RGB',(128,128),(215,51,138))
+        draw=ImageDraw.Draw(source)
+        draw.rectangle((24,24,104,104),fill=(70,110,50))
+        draw.rectangle((48,48,56,56),fill=(215,51,138))
+        draw.rectangle((24,97,104,104),fill=(145,39,93))
+        draw.rectangle((72,48,88,64),fill=(80,70,110))
+        original=source.tobytes()
+        imported,_=props.cutout(source,adaptive_magenta=True)
+        self.assertEqual(imported.getpixel((52,52))[3],255)
+        clean,report=props.cutout(source,adaptive_magenta=True,reserved_magenta=True)
+        self.assertEqual(clean.getpixel((52,52))[3],0)
+        self.assertEqual(clean.getpixel((60,101))[3],0)
+        self.assertEqual(clean.getpixel((80,56)),(80,70,110,255))
+        self.assertTrue(report['reserved_magenta_cleanup'])
+        self.assertGreater(report['enclosed_or_deep_spill_px'],0)
+        self.assertEqual(source.tobytes(),original)
+
+    def test_reserved_ai_key_rejects_large_foreground_removal_and_scene_background(self):
+        source=Image.new('RGB',(128,128),(215,51,138))
+        draw=ImageDraw.Draw(source)
+        draw.rectangle((24,24,104,104),fill=(70,110,50))
+        draw.rectangle((36,36,92,92),fill=(215,51,138))
+        with self.assertRaisesRegex(ValueError,'20%'):props.cutout(source,adaptive_magenta=True,reserved_magenta=True)
+        draw.rectangle((0,0,16,127),fill='blue')
+        with self.assertRaisesRegex(ValueError,'背景未识别'):props.cutout(source,adaptive_magenta=True,reserved_magenta=True)
+
     def test_antialiased_boundary_removes_key_color_spill(self):
         source=fixture();source.putpixel((64,31),(167,40,167))
         output,_=props.cutout(source)
@@ -82,6 +109,21 @@ class StaticPropTests(unittest.TestCase):
             with self.assertRaises(ValueError): props.cutout(image)
         clipped=fixture(True);clipped.putpixel((0,40),(100,100,100,255))
         with self.assertRaisesRegex(ValueError,'裁断'):props.cutout(clipped)
+
+    def test_ai_package_accepts_uniform_muted_magenta_but_rejects_scene(self):
+        image=Image.new('RGB',(128,128),(219,49,130))
+        ImageDraw.Draw(image).ellipse((24,32,104,104),fill=(110,115,100))
+        spec=props.validate(dict(mode='ai',title='石头',description='单块石头'))
+        job,folder=self.prepare('ai')
+        with patch.object(Provider,'__init__',lambda obj,*args:setattr(obj,'base','mock://images')), \
+             patch.object(Provider,'create',return_value={'data':[{'b64_json':encoded(image)}]}) as create:
+            props.execute(self.root,job['id'])
+        create.assert_called_once()
+        target=self.root/'prop-kits'/job['id']
+        props.load_package(self.root,job['id'])
+        with Image.open(target/'sprite.png') as sprite:self.assertEqual(sprite.getpixel((0,0))[3],0)
+        ImageDraw.Draw(image).rectangle((0,0,64,127),fill='green')
+        with self.assertRaisesRegex(ValueError,'背景未识别'):props.package(self.root,image,spec)
 
     def test_package_exports_anchor_local_disabled_collision_and_true_origin(self):
         target=props.package(self.root,fixture(),self.spec)
@@ -141,6 +183,27 @@ class StaticPropTests(unittest.TestCase):
         self.assertEqual(props.load_package(self.root,adjusted.name)['provenance']['art_source'],'ai_complete_object')
         self.assertTrue((adjusted/'generation.json').exists())
         self.assertTrue((adjusted/'inputs/reference.png').exists())
+
+    def test_ai_cleanup_creates_immutable_version_without_provider_call(self):
+        job,folder=self.prepare('ai')
+        with patch.object(Provider,'__init__',lambda obj,*args:setattr(obj,'base','mock://images')), \
+             patch.object(Provider,'create',return_value={'data':[{'b64_json':encoded(fixture())}]}):
+            props.execute(self.root,job['id'])
+        source=self.root/'prop-kits'/job['id'];before=(source/'kit.zip').read_bytes()
+        with patch.object(Provider,'__init__',side_effect=AssertionError('Cleanup must not call provider')):
+            target=props.remake(self.root,dict(source_kit=job['id'],transparency_only=True))
+        manifest=props.load_package(self.root,target.name)
+        self.assertNotEqual(target.name,job['id'])
+        self.assertEqual((source/'kit.zip').read_bytes(),before)
+        self.assertTrue(manifest['processing']['reserved_magenta_cleanup'])
+        self.assertEqual(manifest['processing']['output_visible_reserved_pixels'],0)
+        with Image.open(target/'sprite.png') as image:
+            pixels=np.array(image)
+            self.assertFalse(np.any(props.reserved_magenta_mask(pixels[:,:,:3],manifest['processing']['key_rgb']) & (pixels[:,:,3]>0)))
+        self.assertEqual(manifest['provenance']['parent_kit'],job['id'])
+        self.assertEqual((target/'inputs/original.png').read_bytes(),(source/'inputs/original.png').read_bytes())
+        imported=props.package(self.root,fixture(),self.spec)
+        with self.assertRaisesRegex(ValueError,'AI物件'):props.remake(self.root,dict(source_kit=imported.name,transparency_only=True))
 
     def test_postprocessing_failure_retains_successful_image_without_resubmission(self):
         job,folder=self.prepare('ai')

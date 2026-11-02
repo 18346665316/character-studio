@@ -506,8 +506,42 @@ def handler(panel):
                 return self.respond({'error':'仅允许本机访问'},code=403)
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
+            if parsed.path == '/api/projects/state':
+                from studio_projects import catalog,load,available,task_state,KINDS,production_plan,candidates
+                try:
+                    from building_templates import catalog as template_catalog
+                    projects=catalog(panel.root)
+                    selected=load(panel.root,query['project'][0]) if query.get('project') else None
+                    return self.respond(dict(token=panel.token,projects=projects,selected=selected,
+                        production={e['id']:production_plan(panel.root,selected,e) for e in selected['items']} if selected else {},
+                        candidates=candidates(panel.root,selected) if selected else [],templates=template_catalog(panel.root),assets=available(panel.root),tasks=task_state(panel.root,selected) if selected else [],
+                        kinds={k:dict(label=v[0],workbench=v[1],family=v[2]) for k,v in KINDS.items()}))
+                except (ValueError,KeyError,OSError) as exc:
+                    return self.respond({'error':str(exc)},code=400)
+            if parsed.path == '/api/projects/preview':
+                from studio_projects import load,item,preview
+                try:
+                    p=load(panel.root,query.get('project',[''])[0])
+                    return self.respond(preview(panel.root,p,item(p,query.get('item',[''])[0]),query.get('asset',[''])[0]))
+                except (ValueError,KeyError,OSError) as exc:
+                    return self.respond({'error':str(exc)},code=400)
+            if parsed.path == '/api/projects/file':
+                from studio_projects import load,item,selection_file,folder,digest
+                try:
+                    p=load(panel.root,query.get('project',[''])[0])
+                    if query.get('release'):
+                        rid=name(query['release'][0]);record=next((r for r in p['releases'] if r['id']==rid),None)
+                        if not record: raise ValueError('交付版本不存在')
+                        content=(folder(panel.root,p['id'])/'releases'/(rid+'.zip')).read_bytes()
+                        if digest(content)!=record['sha256']: raise ValueError('交付版本已损坏')
+                        return self.respond(content,'application/zip')
+                    selected=item(p,query.get('item',[''])[0]).get('selected')
+                    if not selected: raise ValueError('尚未选用素材')
+                    return self.respond(selection_file(panel.root,p['id'],selected,'image'),'image/png')
+                except (ValueError,KeyError,OSError) as exc:
+                    return self.respond({'error':str(exc)},code=400)
             try:
-                if parsed.path in ('/','/app.js','/sequence.js','/workspace.js','/style.css',
+                if parsed.path in ('/','/index.html','/app.js','/sequence.js','/workspace.js','/style.css',
                                    '/asset-workspace.js','/characters.html','/studio.css','/navigation.js','/hub.js','/terrain.html','/terrain.js','/terrain.css',
                                    '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
@@ -717,7 +751,29 @@ def handler(panel):
                     raise ValueError('无效的请求结构')
                 with panel.mutex:
                     route = urlparse(self.path).path
-                    if route == '/api/image-provider':
+                    from studio_projects import context,inherit,record_task,ROUTES
+                    project_context=context(panel.root,data) if route in ROUTES else None
+                    inherit(panel.root,project_context,route,data)
+                    if route == '/api/projects/change':
+                        from studio_projects import change
+                        result=change(panel.root,data)
+                    elif route == '/api/projects/generate':
+                        from studio_projects import load,revision,item,production_plan
+                        project=load(panel.root,data.get('project'));revision(project,data)
+                        plan=production_plan(panel.root,project,item(project,data.get('item')))
+                        if not plan['ready']: raise ValueError(plan['reason'])
+                        route=plan['route'];project_context=plan['context']
+                        if route=='/api/buildings/prepare':
+                            from building_pipeline import prepare
+                            result=prepare(panel.root,plan['data'])
+                            record_task(panel.root,project_context,route,result)
+                            result=panel.start_building(dict(task=result['id'],revision=result['revision']))
+                        else:
+                            result=panel.start_terrain(plan['data'],props=route=='/api/props/generate',components=route=='/api/components/generate')
+                    elif route == '/api/projects/release':
+                        from studio_projects import release
+                        result=release(panel.root,data)
+                    elif route == '/api/image-provider':
                         from image_provider_settings import switch
                         result=switch(panel.root,data)
                     elif route == '/api/buildings/templates/save':
@@ -792,6 +848,7 @@ def handler(panel):
                         result = panel.approve(data)
                     else:
                         return self.respond({'error':'接口不存在'},code=404)
+                    record_task(panel.root,project_context,route,result)
                 return self.respond(result)
             except (ValueError,KeyError,OSError,TypeError) as exc:
                 return self.respond({'error':str(exc)},code=400)

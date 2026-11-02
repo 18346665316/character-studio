@@ -26,7 +26,7 @@
  if(jobs)panels.records.append(family==='terrain'?jobs.closest('details'):jobs.parentElement);
  const allTasks=create('a','查看全部生产任务 →');allTasks.href='/?view=tasks';panels.records.append(allTasks);
  const delivery=card('下载与接入','下载当前选中成果，包含图片、规格和接入说明。');delivery.id='asset-delivery';
- const download=$({prop:'prop-download',component:'component-download',transition:'transition-download',terrain:'download-kit'}[family]);delivery.append(download);panels.preview.prepend(delivery);
+ const download=$({prop:'prop-download',component:'component-download',transition:'transition-download',terrain:'download-kit'}[family]);delivery.append(download);panels.preview.append(delivery);
  const exportInfo=create('p',null,'terrain-hint');delivery.prepend(exportInfo);
  for(const id of ['prop-sprite','prop-integrity','component-meta','component-integrity','kit-meta','delivery-hint','transition-meta'])if($(id))delivery.append($(id));
  const waterLink=$('water-shore-link');if(waterLink){const next=card('后续制作','水面外观确认后，可使用当前水面制作水岸。');next.append(waterLink);panels.preview.append(next);const old=aside.querySelector('.terrain-card');if(old&&!old.querySelector('form'))old.remove();}
@@ -64,8 +64,8 @@
  function versions(kits,id){if(!id)return[];const ids=new Set([id]);let changed=true;while(changed){changed=false;for(const k of kits){const p=parent(k);if(p&&(ids.has(k.id)||ids.has(p))){if(!ids.has(k.id)||!ids.has(p))changed=true;ids.add(k.id);ids.add(p);}}}return kits.filter(k=>ids.has(k.id));}
  function historyOptions(kits,id){const input=$(historyId),list=versions(kits,id);input.replaceChildren();for(const k of list){const o=create('option',(k.title||k.id)+' · '+k.id);o.value=k.id;input.append(o);}input.value=id||'';historyCard.hidden=!id||list.length<2;sourceCard.hidden=!id;}
  function saved(){if(activeId)storage.remove(activeId);draftNote.hidden=true;baseValues=values();}
- function openKit(id){location.assign(location.pathname+'?kit='+encodeURIComponent(id));}
- function trackJob(id){saved();location.assign(location.pathname+'?task='+encodeURIComponent(id));}
+ function openKit(id){location.assign(window.StudioProjectURL?.(location.pathname+'?kit='+encodeURIComponent(id))||location.pathname+'?kit='+encodeURIComponent(id));}
+ function trackJob(id){saved();location.assign(window.StudioProjectURL?.(location.pathname+'?task='+encodeURIComponent(id))||location.pathname+'?task='+encodeURIComponent(id));}
  let lastJobState=null;
  function jobRow(row,job,kits,id){
   const requested=query.get('task'),related=versions(kits,id);
@@ -118,5 +118,5 @@
   if(detail){const url=new URL(location.href);url.searchParams.set('kit',k.id);history.replaceState(null,'',url);}
  });
  tabs.onkeydown=event=>{const keys=Object.keys(labels),i=keys.findIndex(k=>buttons[k]===document.activeElement);if(i<0)return;const k=event.key==='ArrowRight'?keys[(i+1)%keys.length]:event.key==='ArrowLeft'?keys[(i+keys.length-1)%keys.length]:event.key==='Home'?keys[0]:event.key==='End'?keys.at(-1):null;if(k){event.preventDefault();select(k,true);buttons[k].focus();}};
- tabs.hidden=!detail&&!task;historyCard.hidden=true;sourceCard.hidden=true;select(task?'records':query.get('tab')||'preview');if(task)status('正在读取任务记录…');else if(!detail)status('选择来源和制作规格，提交后在任务页查看进度。');
+ tabs.hidden=!detail&&!task;historyCard.hidden=true;sourceCard.hidden=true;select(task?'records':query.get('tab')||'preview');if(task)status('正在读取任务记录…');else if(!detail)status('设置本次生成，完成后挑选结果。');
 })();

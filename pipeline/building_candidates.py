@@ -183,11 +183,17 @@ def save(root, data):
         if job.get('workflow') != WORKFLOW or job.get('purpose') == 'template': raise ValueError('此保存入口只支持建筑外观候选')
         if job['status'] in ('queued','running'): raise ValueError('请等待当前生成结束')
         attempt=data.get('attempt')
-        if attempt not in job['attempts'] or attempt != job.get('selected_attempt'): raise ValueError('请先选定候选')
+        if attempt not in job['attempts'] or (not data.get('visual_only') and attempt != job.get('selected_attempt')): raise ValueError('请先选定候选')
         target=bp.attempt_folder(folder,attempt);bp.verify_attempt(folder,target,job);report=verify_evidence(folder,target)
         if data.get('evidence_key') != bp.digest(target/'checks.json'): raise ValueError('候选已更新，请重新载入后标定')
         with Image.open(target/'sprite.png') as image:
-            spec=calibration(data.get('calibration'),image.size)
+            if data.get('visual_only') is True:
+                bbox=image.getchannel('A').getbbox()
+                if not bbox: raise ValueError('候选图片完全透明')
+                spec=dict(source_canvas_px=list(image.size),anchor_px=[(bbox[0]+bbox[2])/2,bbox[3]],
+                    footprint_polygon_px=[],entrance_px=None,output_width_px=min(512,image.width),cell_px=64,
+                    coordinate_space='original_generated_image_pixels',source='visual_only_bottom_center_not_calibrated')
+            else: spec=calibration(data.get('calibration'),image.size)
             scale=spec['output_width_px']/image.width
             sprite=image.resize((spec['output_width_px'],round(image.height*scale)),Image.Resampling.LANCZOS)
         # Every saved calibration is a new immutable asset, even when the candidate is reused.
@@ -206,7 +212,7 @@ def save(root, data):
             units='pixels_relative_to_ground_anchor_x_right_y_down', cell_px=spec['cell_px'],
             entrance_px=scaled(spec['entrance_px']) if spec['entrance_px'] else None,
             entrance_coordinate_space='output_image_pixels',
-            collision=dict(enabled_by_default=False,proposal='user_calibrated_footprint'),
+            collision=dict(enabled_by_default=False,proposal='not_provided' if data.get('visual_only') else 'user_calibrated_footprint'),
             view='from_line_drawing_not_automatically_verified', visual_layers='single_sprite',
             occlusion='not_tested',game_integration='not_tested')
         atomic(staging/'calibration.json',spec);atomic(staging/'integration.json',integration)
@@ -218,8 +224,8 @@ def save(root, data):
             (target/'generation.json','generation.json'),(target/'checks.json','checks.json')]:shutil.copyfile(source,staging/dest)
         if (folder/'template-source.json').exists():shutil.copyfile(folder/'template-source.json',staging/'template-source.json')
         (staging/'INTEGRATION.md').write_text('# Building candidate\n\nGeometry and view come from the input line drawing.\n'
-            'Use sprite_offset_px and the recorded cell_px. Calibration points use original-image pixels; integration uses output pixels.\n'
-            'Footprint is manually marked, not inferred. Collision is OFF by default.\n'
+            'Use sprite_offset_px and the recorded cell_px. Calibration points use original-image pixels; integration uses output pixels.\n'+
+            ('No footprint calibration supplied. Anchor is a bottom-center suggestion. Collision is OFF.\n' if data.get('visual_only') else 'Footprint is manually marked, not inferred. Collision is OFF by default.\n')+
             'Entrance is an optional scene-transition marker. Character scale and occlusion require game testing.\n',encoding='utf-8')
         manifest=dict(schema=SCHEMA,id=kit,title=job['spec']['title'],created_at=bp.now(),asset_family='building',
             workflow=WORKFLOW,source_evidence_base='inputs',task_id=job['id'],attempt_id=attempt,view='from_line_drawing',
@@ -230,6 +236,6 @@ def save(root, data):
             for p in sorted(staging.rglob('*')):
                 if p.is_file() and p.name!='kit.zip':archive.write(p,str(p.relative_to(staging)))
         final.parent.mkdir(parents=True,exist_ok=True);staging.rename(final);bp.load_package(root,kit)
-        job.update(status='complete',error=None,stage='建筑素材已保存，游戏接入待验证',kit_id=kit,revision=job['revision']+1)
+        job.update(selected_attempt=attempt,status='complete',error=None,stage='建筑素材已保存，游戏接入待验证',kit_id=kit,revision=job['revision']+1)
         job.setdefault('saved_kits',[]).append(kit);atomic(folder/'job.json',job)
         return manifest

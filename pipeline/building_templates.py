@@ -6,7 +6,7 @@ from PIL import Image
 from asset_repository import AssetRepository, atomic, read, name
 import building_pipeline as bp
 
-VIEWS = {'isometric_2_1':'2:1 等距地格', 'isometric_true':'等轴测（严格等角）', 'custom':'沿用原图视角'}
+VIEWS = {'orthographic_three_quarter':'正面斜俯视', 'isometric_2_1':'2:1 等距地格', 'isometric_true':'等轴测（严格等角）', 'custom':'沿用原图视角'}
 
 
 def folder_for(root, identity):
@@ -39,7 +39,6 @@ def save(root, data):
     with bp.task_lock(root):
         title=text(data.get('title'),'模板名称');view=data.get('view','isometric_2_1')
         if view not in VIEWS:raise ValueError('模板视角无效')
-        if data.get('confirmed') is not True:raise ValueError('请先检查模板的视角和建筑轮廓')
         provenance={}
         target=None
         if data.get('task'):
@@ -66,7 +65,7 @@ def save(root, data):
             for filename in ('prompt.txt','generation.json','attempt.json','checks.json'):shutil.copyfile(target/filename,staging/filename)
         meta=dict(schema='studio.building-template/0.1',id=identity,title=title,view=view,view_label=VIEWS[view],
                   created_at=bp.now(),canvas_px=list(drawing.size),outline_sha256=bp.digest(staging/'outline.png'),
-                  source=provenance,review='user_confirmed_not_projection_measurement')
+                  source=provenance,review='saved_for_reuse_not_projection_measurement')
         atomic(staging/'template.json',meta);folder.parent.mkdir(parents=True,exist_ok=True);staging.rename(folder)
         if target:
             job['template_id']=identity;job['status']='complete';job['stage']='建筑模板已保存，可用于不同外观风格';job['error']=None
@@ -77,7 +76,7 @@ def save(root, data):
 def prepare(root,data):
     title=text(data.get('title'),'模板名称');description=text(data.get('description'),'建筑形体描述',2000)
     view=data.get('view','isometric_2_1')
-    if view not in VIEWS or view=='custom':raise ValueError('生成模板请选择2:1等距地格或严格等轴测')
+    if view not in VIEWS or view=='custom':raise ValueError('请选择支持的模板生成视角')
     task=bp.identity();folder=bp.folder_for(root,task);folder.mkdir(parents=True)
     spec=dict(title=title,description=description,view=view)
     atomic(folder/'template-request.json',spec)
@@ -87,14 +86,15 @@ def prepare(root,data):
 
 
 def prompt(spec):
-    view=('Use orthographic dimetric game projection aligned to a 2:1 diamond tile. '
+    view=('Use a front-facing orthographic three-quarter game view, visible roof and front wall. Front wall horizontal, door facing screen bottom, roof recedes upward, minimal side wall. Do not use symmetric isometric sides. '
+          if spec['view']=='orthographic_three_quarter' else 'Use orthographic dimetric game projection aligned to a 2:1 diamond tile. '
           'The two ground directions are symmetric, with each edge running twice as far horizontally as vertically. '
           if spec['view']=='isometric_2_1' else
           'Use strict orthographic isometric projection, with all three world axes equally foreshortened. '
           'The two ground directions are symmetric and steeper than in a dimetric diamond tile view. ')
     return ('Draw ONE clean architectural line-art master of a standalone building for reuse in 2D game art production. '
             +view+'Parallel edges remain parallel, no perspective convergence. Vertical edges stay vertical. '
-            'Show the roof and two sides. Plain white background, thin dark visible architectural outlines, no color, '
+            'Plain white background, thin dark visible architectural outlines, no color, '
             'no painted materials, no shading, no hatching, no ground, shadows, grid, dimension annotations or labels. '
             'Whole building centered in a square canvas with 12 percent empty margins. '
             'Depict only the building: no text, numbers, angle markers, measurement arrows, axes, '

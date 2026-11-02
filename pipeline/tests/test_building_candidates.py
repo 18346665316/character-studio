@@ -51,6 +51,19 @@ class BuildingCandidatesTests(unittest.TestCase):
             evidence_key=bp.digest(target/'checks.json'),calibration=values.get('calibration',self.marking)))
         self.job=read(self.folder/'job.json');return result
 
+    def test_visual_adoption_needs_no_prior_selection_or_calibration(self):
+        target=self.generate();attempt=self.job['current_attempt']
+        self.assertIsNone(self.job.get('selected_attempt'))
+        result=candidates.save(self.root,dict(task=self.task,revision=self.job['revision'],attempt=attempt,
+            evidence_key=bp.digest(target/'checks.json'),visual_only=True))
+        bp.load_package(self.root,result['id'])
+        folder=self.root/'building-kits'/result['id']
+        integration=read(folder/'integration.json')
+        self.assertEqual(integration['footprint_polygon'],[])
+        self.assertEqual(integration['collision']['proposal'],'not_provided')
+        self.assertFalse(result['production_ready'])
+        self.assertEqual(read(folder/'calibration.json')['source'],'visual_only_bottom_center_not_calibrated')
+
     def test_input_is_original_line_drawing_and_style_no_structure_defaults(self):
         self.assertFalse((self.folder/'structure').exists());self.assertEqual(self.job['attempts'],[])
         first=self.generate();self.assertEqual(self.job['status'],'waiting_review')

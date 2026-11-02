@@ -178,7 +178,12 @@ class BuildingHTTPTests(unittest.TestCase):
             for width in [390,1280]:
                 page.set_viewport_size({'width':width,'height':1000})
                 self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
-            page.goto(self.base+'/?category='+__import__('urllib.parse',fromlist=['quote']).quote('建筑'))
+            from studio_projects import change
+            project=change(self.root,dict(action='create',title='浏览器素材项目'))
+            project=change(self.root,dict(action='add',project=project['id'],revision=project['revision'],kind='building',title='测试住宅'))
+            page.goto(self.base+'/?project='+project['id'])
+            page.get_by_role('button',name='挑选已有成果').click()
+            page.get_by_role('button',name='素材库',exact=True).click()
             page.get_by_role('heading',name='浏览器小屋',exact=True).wait_for()
             self.assertFalse(errors)
 
@@ -246,11 +251,11 @@ class BuildingHTTPTests(unittest.TestCase):
             page.get_by_label('原始建筑框线图',exact=True).set_input_files(dict(name='outline.png',mimeType='image/png',buffer=stream.getvalue()))
             page.get_by_role('button',name='生成第一个候选（可能产生费用）').click()
             page.wait_for_url('**/buildings.html?task=*')
-            page.get_by_role('button',name='选用此候选',exact=True).wait_for()
+            page.get_by_role('button',name='设置游戏占地与锚点（可选）',exact=True).wait_for()
             task=page.url.split('task=')[1]
             page.get_by_role('button',name='使用相同输入再生成一张（可能产生费用）').click()
             expect(page.locator('.building-candidate')).to_have_count(2)
-            page.locator('.building-candidate').first.get_by_role('button',name='选用此候选').click()
+            page.locator('.building-candidate').first.get_by_role('button',name='设置游戏占地与锚点（可选）').click()
             canvas=page.locator('#building-calibration-canvas');canvas.wait_for()
             box=canvas.bounding_box()
             for x,y in [(.25,.67),(.5,.57),(.8,.7),(.5,.86)]:canvas.click(position=dict(x=box['width']*x,y=box['height']*y))
@@ -288,7 +293,6 @@ class BuildingHTTPTests(unittest.TestCase):
             page.get_by_label('模板名称',exact=True).fill('可复用旅馆')
             page.get_by_label('模板来源',exact=True).select_option('upload')
             page.get_by_label('模板线框图',exact=True).set_input_files(dict(name='outline.png',mimeType='image/png',buffer=stream.getvalue()))
-            page.get_by_label('我已检查原图的视角、建筑轮廓与留白',exact=True).check()
             page.get_by_role('button',name='保存建筑模板',exact=True).click()
             page.get_by_text('模板已保存，可在下方填写风格并生成建筑。',exact=True).wait_for()
             selected=page.get_by_label('建筑模板',exact=True).input_value();self.assertTrue(selected)
@@ -304,7 +308,6 @@ class BuildingHTTPTests(unittest.TestCase):
             page.get_by_label('建筑形体描述',exact=True).fill('两层方形塔楼，平顶')
             page.get_by_role('button',name='生成线框候选（可能产生费用）',exact=True).click()
             page.wait_for_url('**/buildings.html?task=*')
-            page.get_by_label('我已检查这张线框图的视角与建筑轮廓',exact=True).check()
             page.get_by_role('button',name='保存为建筑模板',exact=True).click()
             page.wait_for_url('**/buildings.html?template=*')
             expect(page.get_by_label('建筑模板',exact=True)).not_to_have_value('')
@@ -320,9 +323,10 @@ class BuildingHTTPTests(unittest.TestCase):
         template=self.post('/api/buildings/templates/save',data)
         with urlopen(self.base+'/api/buildings/template-file?id='+template['id']) as response:self.assertEqual(response.headers.get_content_type(),'image/png')
         with self.assertRaises(HTTPError):urlopen(self.base+'/api/buildings/template-file?id=../../.env')
-        with self.assertRaises(HTTPError):self.post('/api/buildings/templates/save',{**data,'confirmed':False})
+        unconfirmed=self.post('/api/buildings/templates/save',{**data,'confirmed':False})
+        self.assertEqual(unconfirmed['review'],'saved_for_reuse_not_projection_measurement')
         with urlopen(self.base+'/api/buildings/state') as response:state=json.load(response)
-        self.assertEqual(state['templates'][0]['id'],template['id'])
+        self.assertEqual(state['templates'][0]['id'],unconfirmed['id'])
 
 
 if __name__=='__main__':unittest.main()

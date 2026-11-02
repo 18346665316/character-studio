@@ -93,7 +93,8 @@ def prompt(description,kind='rock',projection='orthographic_three_quarter'):
             'No other objects, no ground plane, no grass, no cast shadow, no contact shadow, no horizon. '
             'Soft upper-left lighting painted on the object only. '
             'Background must be perfectly flat solid RGB(255,0,255), hex #FF00FF, touching all four edges. '
-            'No magenta or pink on the object; no reflected background color. '
+            'Magenta and pink are reserved for background removal, including empty holes between leaves or structural openings. '
+            'No magenta or pink material on the object; no reflected background color or pink contact rim. '
             'No transparency, no checkerboard, no text, no labels, no border, no collage or variants. '
             'Use the reference only for palette, brushwork and detail scale; do not copy its composition. '
             'Art direction: '+description)
@@ -116,7 +117,15 @@ def prepare(root,data):
     return job
 
 
-def cutout(image, *, adaptive_magenta=False):
+def reserved_magenta_mask(rgb,key):
+    rgb=np.asarray(rgb).astype(np.int16)
+    red=rgb[:,:,0]-rgb[:,:,1];blue=rgb[:,:,2]-rgb[:,:,1]
+    key_ratio=float(key[0]-key[1])/max(1,float(key[2]-key[1]))
+    ratio=red/np.maximum(blue,1)
+    return (red>20)&(blue>15)&(ratio>=key_ratio*.65)&(ratio<=key_ratio*1.65)
+
+
+def cutout(image, *, adaptive_magenta=False, reserved_magenta=False):
     """Keep supplied alpha, or remove border-connected magenta / near-white.
 
     Background removal requires foreground/background color separation. It is not
@@ -176,7 +185,20 @@ def cutout(image, *, adaptive_magenta=False):
         for ny,nx in ((y-1,x),(y+1,x),(y,x-1),(y,x+1)):
             if 0<=ny<h and 0<=nx<w and candidate[ny,nx] and not removed[ny,nx]:
                 removed[ny,nx]=True;queue.append((ny,nx))
-    # Decontaminate only the narrow boundary ring, preserving interior colors.
+    reserved_count=0
+    enclosed_count=0
+    if reserved_magenta and not white:
+        # Only AI production reserves this color family for the background.
+        # Match chroma direction, allowing darker spill but excluding green/brown/blue.
+        chroma=reserved_magenta_mask(rgb,key)
+        extra=chroma & ~removed
+        reserved_count=int(extra.sum())
+        if reserved_count>max(1,int((~removed).sum()))*.20:
+            raise ValueError('品红清理涉及超过20%的主体区域，可能误删主体；请重新生成不含品红材质的物件')
+        enclosed_count=int((extra & ~np.asarray(Image.fromarray(removed.astype('uint8')*255).filter(ImageFilter.MaxFilter(7))).astype(bool)).sum())
+        removed |= chroma
+    # Decontaminate the boundary of external background and cleaned internal holes.
+
     dilated=np.asarray(Image.fromarray(removed.astype('uint8')*255).filter(ImageFilter.MaxFilter(7)))>0
     ring=dilated & ~removed
     foreground=rgb.astype(float)/255
@@ -213,9 +235,12 @@ def cutout(image, *, adaptive_magenta=False):
     if min(bbox[0],bbox[1],w-bbox[2],h-bbox[3])<3: raise ValueError('物件接近画布边缘，可能被裁断')
     return result,{'method':('border_connected_near_white_key' if white else
                              'border_connected_sampled_magenta_key' if sampled else 'border_connected_magenta_key'),
+                   'reserved_magenta_cleanup':bool(reserved_magenta and not white),
+                   'reserved_color_removed_px':reserved_count,'enclosed_or_deep_spill_px':enclosed_count,
+                   'semantic_removal_verified':False,
                    'key_rgb':key.tolist(),'removed_fraction':round(float(removed.mean()),4),
                    'edge_color_correction':'3px_boundary_only','art_review':'pending',
-                   'limitations':'仅适合主体与背景可区分的实心物件；白色主体可能与白底混淆。未做语义分割，内部孔洞和碎屑需人工检查'}
+                   'limitations':'未做语义分割。AI品红背景模式会清除匹配的封闭孔洞与残色，主体不得含品红材质；仍需检查误删、细枝和透明边缘。导入模式保留内部颜色。'}
 
 
 def number(value,default,low,high,label):
@@ -257,7 +282,7 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
         if target.exists():
             load_package(root,package_id)
             return target
-        sprite,processing=cutout(original)
+        sprite,processing=cutout(original,adaptive_magenta=spec.get('mode')=='ai',reserved_magenta=spec.get('mode')=='ai')
         processing['single_object']=single_object(sprite)
         bbox=sprite.getchannel('A').getbbox()
         crop=sprite.crop(bbox)
@@ -268,6 +293,17 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
         canvas=Image.new('RGBA',(size,size))
         offset=((size-dimensions[0])//2,size-padding-dimensions[1])
         canvas.paste(crop,offset)
+        if processing.get('reserved_magenta_cleanup'):
+            # Resampling/unmatting can mix foreground colors back into the key range.
+            pixels=np.array(canvas)
+            spill=reserved_magenta_mask(pixels[:,:,:3],processing['key_rgb']) & (pixels[:,:,3]>0)
+            visible_spill=int((spill & (pixels[:,:,3]>16)).sum())
+            if visible_spill>max(8,int((pixels[:,:,3]>16).sum())*.02):
+                raise ValueError('缩放后仍有较多品红残色，请重新生成不含品红材质的物件')
+            pixels[spill]=0
+            canvas=Image.fromarray(pixels,'RGBA')
+            processing['resampled_spill_removed_px']=int(spill.sum())
+            processing['output_visible_reserved_pixels']=0
         settings=settings or {}
         projection=validate_projection(spec.get('projection','orthographic_three_quarter'),'orthographic_three_quarter')
         isometric=projection==ISOMETRIC
@@ -343,7 +379,7 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
             '不可用整张图片轮廓替代落地占用范围。本包不提供物理、导航或角色遮挡已通过的保证。\n\n'
             'preview.png是三种固定底色的边缘检查图；anchor_collision.png青色十字是锚点，橙色是建议碰撞。'
             'cutout.png保留裁切前抠图，inputs/original.png保留解码后原始图。原始提示词与参考图（如有）一并交付。'
-            '单色抠图只从边界连通区域移除背景；近纯白与品红背景自动识别，边缘估算Alpha并校正残色。主体接近背景颜色、透明物或复杂内部空洞应使用透明PNG。\n',encoding='utf-8')
+            '导入图保留内部颜色，只从边界连通区域移除背景。AI品红背景物件自动清理匹配的封闭孔洞及残色，主体不得使用品红材质；未做语义识别，仍需检查误删、细枝、内部孔洞和透明边缘。\n',encoding='utf-8')
         if isometric:
             with (staging/'INTEGRATION.md').open('a',encoding='utf-8') as guide:
                 guide.write('\n等距规格为2:1斜二测，参考地格128×64，基向量(64,32)、(-64,32)。物件保持原始造型，程序不旋转或压扁图片。'
@@ -409,6 +445,8 @@ def catalog(root):
 def remake(root,data):
     with task_lock(root):
         source_id=name(data.get('source_kit'));manifest=load_package(root,source_id)
+        if data.get('transparency_only') and manifest['provenance'].get('art_source')!='ai_complete_object':
+            raise ValueError('仅支持重新处理Studio生成的AI物件；导入图片保留原处理规则')
         folder=AssetRepository(root).scoped('prop-kits/'+source_id,'prop-kits')
         spec=read(folder/'production.json')
         with Image.open(folder/'inputs/original.png') as image: original=image.convert('RGBA')

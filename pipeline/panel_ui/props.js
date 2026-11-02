@@ -31,12 +31,15 @@
   $('prop-generate').disabled=!state||busy||active()||(ai&&!state.image_api_configured);
   const kit=state?.kits.find(k=>k.id===selected);
   $('prop-remake').disabled=busy||active()||!kit||!kit.integrity.passed;
+  $('prop-cleanup').disabled=busy||active()||!kit||!kit.integrity.passed;
   const noCollision=$('prop-result-usage').value==='none';$('prop-width').disabled=noCollision;$('prop-depth').disabled=noCollision;
   for(const node of nodes.values())node.querySelector('button').disabled=busy||active();
  }
  function show(kit,force=false){
   if(!kit){selected=null;$('prop-result').hidden=true;$('prop-result-title').textContent='此类型暂无素材';return;}
   // Integrity can change independently of selection; keep it fresh without erasing edits.
+  $('prop-cleanup').hidden=kit.provenance.art_source!=='ai_complete_object';
+  $('prop-cleanup-info').textContent=kit.provenance.art_source==='ai_complete_object'?(kit.processing?.reserved_magenta_cleanup?'已自动清理品红背景、封闭孔洞和匹配残色；请检查主体是否完整。':'可复用原图重新处理透明背景，另存新版本，不调用生图服务。'):'';
   $('prop-download').hidden=!kit.integrity.passed;
   $('prop-integrity').textContent=kit.integrity.passed?'文件完整性通过；外观、锚点与游戏接入仍待验收。':'完整性失败：'+kit.integrity.error;
   // Background refresh must not erase the user's unsaved anchor edits.
@@ -101,6 +104,11 @@
    else {data.description=$('prop-description').value;if($('prop-reference').files[0])data.reference=await fileData($('prop-reference').files[0]);}
    const job=await api('/api/props/generate',data);StudioAssets.trackJob(job.id);
   }catch(e){status(e.message,true);}finally{busy=false;controls();}
+ };
+ $('prop-cleanup').onclick=async()=>{
+  if(busy||active()||!selected)return;busy=true;controls();
+  try{const kit=await api('/api/props/remake',{source_kit:selected,transparency_only:true});StudioAssets.saved();StudioAssets.openKit(kit.id);}
+  catch(e){status(e.message,true);}finally{busy=false;controls();}
  };
  $('prop-adjust').onsubmit=async event=>{
   event.preventDefault();if(busy||active())return;busy=true;controls();

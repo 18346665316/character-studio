@@ -25,14 +25,23 @@ class BuildingTemplateTests(unittest.TestCase):
     def upload(self):
         return templates.save(self.root,dict(title='旅馆母版',view='isometric_2_1',line_drawing=encoded(self.outline),confirmed=True))
 
-    def test_upload_requires_confirmation_and_preserves_immutable_versions(self):
-        with self.assertRaisesRegex(ValueError,'检查'):templates.save(self.root,dict(title='模板',line_drawing=encoded(self.outline)))
+    def test_front_facing_template_generation_and_import(self):
+        job=templates.prepare(self.root,dict(title='农舍',description='单层双坡屋顶',view='orthographic_three_quarter'))
+        prompt=templates.prompt(job['spec'])
+        self.assertIn('door facing screen bottom',prompt)
+        self.assertNotIn('Show the roof and two sides',prompt)
+        saved=templates.save(self.root,dict(title='斜俯视农舍',view='orthographic_three_quarter',line_drawing=encoded(self.outline),confirmed=True))
+        self.assertEqual(saved['view'],'orthographic_three_quarter')
+
+    def test_upload_needs_no_confirmation_and_preserves_immutable_versions(self):
+        saved=templates.save(self.root,dict(title='模板',line_drawing=encoded(self.outline)))
+        self.assertEqual(saved['review'],'saved_for_reuse_not_projection_measurement')
         first=self.upload();second=self.upload()
-        self.assertNotEqual(first['id'],second['id']);self.assertEqual(len(templates.catalog(self.root)),2)
+        self.assertNotEqual(first['id'],second['id']);self.assertEqual(len(templates.catalog(self.root)),3)
         folder,meta=templates.load(self.root,first['id']);self.assertEqual(meta['view'],'isometric_2_1')
         (folder/'outline.png').write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError,'变化'):templates.load(self.root,first['id'])
-        self.assertEqual(len(templates.catalog(self.root)),1)
+        self.assertEqual(len(templates.catalog(self.root)),2)
 
     def test_same_template_supports_distinct_styles_with_identical_line_input(self):
         template=self.upload();jobs=[]

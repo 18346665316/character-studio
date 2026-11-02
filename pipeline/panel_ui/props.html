@@ -11,7 +11,7 @@
 <label for="prop-title">名称</label><input id="prop-title" value="手绘石头" maxlength="60" required>
 <div id="prop-ai"><label for="prop-description">物件描述</label><textarea id="prop-description" rows="5" maxlength="2000" required>温暖田园风2D游戏中的一块矮胖灰褐色石头，轮廓略不规则，大块面手绘，少量细小裂纹，低对比度，柔和色彩。</textarea>
 <label for="prop-reference">风格参考（可选，不透明图片）</label><input id="prop-reference" type="file" accept="image/png,image/jpeg,image/webp"><p id="prop-api" class="terrain-hint"></p>
-<p class="terrain-hint">AI生成完整物件，调用服务会产生费用。程序优先使用品红背景，也支持近纯白背景抠图；白色主体请使用品红背景或透明PNG。参考图只约束画风。</p></div>
+<p class="terrain-hint">AI生成完整物件，调用服务会产生费用。品红只用于背景，主体不要使用粉色或品红材质。生成后自动清理外部背景、匹配的封闭孔洞与残色；仍需检查主体是否完整。参考图只约束画风。</p></div>
 <div id="prop-import" hidden><label for="prop-image">完整物件图片</label><input id="prop-image" type="file" accept="image/png,image/jpeg,image/webp"><p class="terrain-hint">透明PNG会保留透明度；不透明图支持近纯白或纯品红（#FF00FF）背景；主体须与背景明显区分。单个物件四周留白，无地面或投影。每张不超过8MB，物件图不超过400万像素。</p></div>
 <details><summary>接入建议（可选）</summary><label for="prop-collision-usage">碰撞建议用途</label><select id="prop-collision-usage"><option value="blocking">阻挡候选</option><option value="optional">可选占地建议</option><option value="none">不提供碰撞形状</option></select><p class="terrain-hint">所有建议默认关闭；用途标签不决定游戏中的碰撞行为。</p></details><label for="prop-size">输出画布</label><select id="prop-size"><option value="256">256 × 256</option><option value="128">128 × 128</option></select>
 <p class="terrain-hint">统一画布与留白，保留宽高比；实际游戏比例由接入方决定。一次生产一个完整物件。多个明显分离的前景区域会被拒绝。</p>
@@ -20,7 +20,7 @@
 <section class="terrain-results">
 <div class="terrain-card terrain-result-heading prop-result-heading"><h2 id="prop-result-title">制作第一个物件</h2><select id="prop-filter" aria-label="按物件类型筛选"><option value="all">全部类型</option></select><select id="prop-history" aria-label="已有物件"></select></div>
 <div id="prop-result" hidden>
-<div class="terrain-card"><h2>透明边缘验收</h2><p id="prop-origin" class="terrain-hint"></p><img id="prop-preview" class="surface-preview" alt="棋盘格、深色与绿色固定背景上的物件"><p class="terrain-hint">检查白边、品红残色、裁断及碎屑。三种底色仅用于验收，不随透明精灵导出。</p><a id="prop-sprite" download>查看透明PNG</a></div>
+<div class="terrain-card"><h2>透明边缘验收</h2><p id="prop-origin" class="terrain-hint"></p><img id="prop-preview" class="surface-preview" alt="棋盘格、深色与绿色固定背景上的物件"><p class="terrain-hint">检查白边、品红残色、裁断及碎屑。三种底色仅用于验收，不随透明精灵导出。</p><button id="prop-cleanup" type="button" hidden>重新处理透明背景（不生图）</button><p id="prop-cleanup-info" class="terrain-hint"></p><a id="prop-sprite" download>查看透明PNG</a></div>
 <div class="terrain-card"><h2>落地锚点与碰撞建议</h2><img id="prop-overlay" alt="锚点和建议碰撞范围"><p class="terrain-hint">青色十字：落地锚点（等距为占地中心建议）；橙色：默认关闭的碰撞建议。图像坐标X向右、Y向下；碰撞点相对锚点。</p>
 <form id="prop-adjust"><label for="prop-result-usage">碰撞建议用途（均默认关闭）</label><select id="prop-result-usage"><option value="blocking">阻挡候选</option><option value="optional">可选占地建议</option><option value="none">不提供碰撞形状</option></select><div class="terrain-fields"><label>锚点X<input id="prop-anchor-x" type="number" step="0.01" required></label><label>锚点Y<input id="prop-anchor-y" type="number" step="0.01" required></label><label>碰撞宽度<input id="prop-width" type="number" step="0.01" required></label><label>碰撞深度<input id="prop-depth" type="number" step="0.01" required></label></div><button id="prop-remake" type="submit">另存调整版本（不调用AI）</button></form>
 <p id="prop-integrity" class="terrain-hint"></p><a id="prop-download" class="delivery-export" download>下载素材包 ZIP</a><p class="terrain-hint">包含透明图片、原图、提示词、参考图（如有）、来源记录、锚点、可选碰撞与接入说明。物理与实际角色遮挡尚未验收。</p></div></div>
