@@ -14,6 +14,7 @@ from PIL import Image, ImageFilter
 
 from asset_repository import AssetRepository, atomic, name, read
 from task_lock import task_lock
+from asset_projection import ISOMETRIC, surface_exports, validate_projection
 
 DEFAULT_DESCRIPTION = '手绘游戏素材，浅绿色草地，浅褐色泥土路，少量细碎石，柔和色彩。'
 DIRECTIONS = [('north', 1, 0, -1), ('east', 2, 1, 0),
@@ -42,11 +43,11 @@ def decode_image(content):
 
 
 def validate(data):
-    title, description = data.get('title'), data.get('description')
+    title, description = data.get('title'), data.get('description', '')
     if not isinstance(title, str) or not 1 <= len(title.strip()) <= 60:
         raise ValueError('套件名称需为 1–60 字')
-    if not isinstance(description, str) or not 1 <= len(description.strip()) <= 2000:
-        raise ValueError('请填写 1–2000 字的素材描述')
+    if not isinstance(description, str) or len(description.strip()) > 2000 or (data.get('mode', 'ai') == 'ai' and not description.strip()):
+        raise ValueError('AI 生成时请填写 1–2000 字的素材描述')
     size, width = data.get('tile_size', 64), data.get('road_width', 0.5)
     if type(size) is not int or size not in (32, 64, 128):
         raise ValueError('格子尺寸须为 32 / 64 / 128')
@@ -62,8 +63,11 @@ def validate(data):
     if asset_type not in ('terrain','material'): raise ValueError('未知素材类型')
     material_kind=data.get('material_kind','generic')
     if material_kind not in ('generic','grass','sand','water','stone'): raise ValueError('未知材质分类')
-    return dict(asset_type=asset_type, material_kind=material_kind, title=title.strip(), description=description.strip(), tile_size=size,
-                road_width=width, mode=mode, view='top_down', seed=17, finish=finish)
+    projection=validate_projection(data.get('projection','top_down'),'top_down')
+    if projection==ISOMETRIC and (asset_type!='material' or material_kind=='water'):
+        raise ValueError('等距首轮仅支持独立地面材质，不支持道路和水体')
+    return dict(projection=projection,asset_type=asset_type, material_kind=material_kind, title=title.strip(), description=description.strip(), tile_size=size,
+                road_width=width, mode=mode, view=projection, seed=17, finish=finish)
 
 
 def periodic(image, size):
@@ -241,6 +245,14 @@ def compile_material(folder,spec,identity):
                            'shore_distance':False,'collision':False}
     (folder/'INTEGRATION.md').write_text('# 独立材质素材\n\n按 manifest.json 的 variants[].ground 或 ground_cell 读取变化块。所有变化块可相邻使用。'
         '可作为地表过渡或静态水岸的来源。没有道路块、动画、碰撞或深度数据。边缘检查不代表美术验收。\n',encoding='utf-8')
+    if spec.get('projection')==ISOMETRIC:
+        manifest['projection_spec']=surface_exports(folder,images,size)
+        manifest['view']=ISOMETRIC
+        with (folder/'INTEGRATION.md').open('a',encoding='utf-8') as guide:
+            guide.write('\n等距输出见projection_spec：2:1菱形透明PNG，cell_px和basis_px定义游戏中的地格。'
+                        '按variants[].atlas_rect_px读取等距图集，以anchor_px定位；Y排序使用占地中心。'
+                        '原有ground/atlas仍为正俯视纹理源，仅供纹理复用；游戏请使用isometric_atlas.png。'
+                        '只投影平面纹理，不生成侧壁、高度、道路、碰撞和导航。\n')
     manifest['files_sha256']={str(p.relative_to(folder)):digest(p) for p in folder.rglob('*') if p.is_file() and p.name not in ('manifest.json','kit.zip')}
     atomic(folder/'manifest.json',manifest)
     with zipfile.ZipFile(folder/'kit.zip','w',zipfile.ZIP_DEFLATED) as archive:
@@ -353,6 +365,13 @@ def compile_kit(folder, spec, identity=None):
 
 def prepare(root, data):
     assets = AssetRepository(root)
+    if data.get('mode')=='reuse':
+        data=dict(data)
+        source_id=name(data.get('source_kit'))
+        source_manifest=read(assets.scoped('terrain-kits/'+source_id+'/manifest.json','terrain-kits'))
+        if not source_manifest: raise ValueError('来源套件不存在')
+        for key,default in [('asset_type','terrain'),('material_kind','generic'),('projection','top_down')]:
+            data.setdefault(key,source_manifest.get(key,default))
     spec = validate(data)
     if spec['mode'] == 'ai':
         from terrain_images import configured
@@ -378,6 +397,8 @@ def prepare(root, data):
         spec['source_kit']=source_id
         spec['asset_type']=manifest.get('asset_type','terrain')
         spec['material_kind']=manifest.get('material_kind','generic')
+    if spec['projection']==ISOMETRIC and (spec['asset_type']!='material' or spec['material_kind']=='water'):
+        raise ValueError('等距首轮仅支持独立地面材质，不支持道路和水体')
     if data.get('reference'):
         images['reference'] = decode_image(data['reference'])
     if spec['mode'] == 'import':

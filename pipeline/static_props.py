@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from asset_repository import AssetRepository, atomic, name, read
 from task_lock import task_lock
+from asset_projection import ISOMETRIC, contract, validate_projection
 from terrain import decode_image
 from terrain_images import configured, generate_materials
 
@@ -71,15 +72,24 @@ def validate(data):
     if type(size) is not int or size not in (128,256): raise ValueError('输出尺寸须为128或256')
     usage=data.get('collision_usage',KINDS[kind]['collision_usage'])
     if not isinstance(usage,str) or usage not in COLLISION_USAGES: raise ValueError('未知碰撞建议用途')
-    return {'title':title.strip(),'description':description.strip(),'mode':mode,'size':size,'kind':kind,'collision_usage':usage}
+    projection=validate_projection(data.get('projection','orthographic_three_quarter'),'orthographic_three_quarter')
+    return {'projection':projection,'title':title.strip(),'description':description.strip(),'mode':mode,'size':size,'kind':kind,'collision_usage':usage}
 
 
-def prompt(description,kind='rock'):
+def prompt(description,kind='rock',projection='orthographic_three_quarter'):
+    validate_projection(projection,'orthographic_three_quarter')
     profile=KINDS[kind]
+    view=('2:1 dimetric game projection, camera azimuth 45 degrees and elevation 30 degrees. '
+          'Visible top, left and right faces; equal left and right face widths. '
+          'Ground-plane axes slope +0.5 and -0.5 in screen space (26.565 degrees to horizontal), vertical edges stay vertical. '
+          'Parallel edges remain parallel, no perspective convergence. '
+          if projection==ISOMETRIC else
+          'Orthographic three-quarter view from above, visible top and front, no perspective convergence. ')
+    composition=('one closed wooden crate with a visible diamond top and two equal side faces' if projection==ISOMETRIC and kind=='crate' else profile['composition'])
     return (f'Create exactly ONE complete standalone {profile["subject"]} sprite for a 2D game. '
             f'The AI must draw the full {profile["subject"]} silhouette and its surface, not a texture swatch. '
-            'Orthographic three-quarter view from above, visible top and front, no perspective convergence. '
-            f'Centered {profile["composition"]}, full silhouette within the square, 12% empty margin on every side. '
+            +view+
+            f'Centered {composition}, full silhouette within the square, 12% empty margin on every side. '
             'No other objects, no ground plane, no grass, no cast shadow, no contact shadow, no horizon. '
             'Soft upper-left lighting painted on the object only. '
             'Background must be perfectly flat solid RGB(255,0,255), hex #FF00FF, touching all four edges. '
@@ -99,7 +109,7 @@ def prepare(root,data):
     (folder/'inputs').mkdir(parents=True)
     if image is not None: image.save(folder/'inputs/original.png')
     if reference is not None: reference.save(folder/'inputs/reference.png')
-    spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind']) if spec['mode']=='ai' else '')
+    spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind'],spec['projection']) if spec['mode']=='ai' else '')
     job={'id':job_id,'status':'queued','stage':'等待制作物件','error':None,'spec':spec,
          'created_at':datetime.now(timezone.utc).isoformat()}
     atomic(folder/'job.json',job)
@@ -233,6 +243,8 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
         offset=((size-dimensions[0])//2,size-padding-dimensions[1])
         canvas.paste(crop,offset)
         settings=settings or {}
+        projection=validate_projection(spec.get('projection','orthographic_three_quarter'),'orthographic_three_quarter')
+        isometric=projection==ISOMETRIC
         anchor=[number(settings.get('anchor_x'),size/2,0,size-1,'锚点X'),
                 number(settings.get('anchor_y'),size-padding-1,0,size-1,'锚点Y')]
         kind=spec.get('kind','rock');profile=KINDS[kind]
@@ -240,8 +252,14 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
         if not isinstance(usage,str) or usage not in COLLISION_USAGES: raise ValueError('未知碰撞建议用途')
         width=number(settings.get('collision_width'),max(1,round(dimensions[0]*profile['width_ratio'],2)),1,size,'碰撞宽度')
         depth=number(settings.get('collision_depth'),max(1,round(dimensions[1]*profile['depth_ratio'],2)),1,size,'碰撞深度')
-        # The foot anchor is the bottom of this ellipse. Points are local to it.
+        if isometric:
+            depth=number(settings.get('collision_depth'),round(width/2,2),1,size,'碰撞深度')
+            anchor[1]=number(settings.get('anchor_y'),round(size-padding-width/4,2),0,size-1,'锚点Y')
+        # Legacy foot anchor sits at ellipse bottom; dimetric anchor estimates ground center.
         polygon=[[round(math.cos(i*math.pi/8)*width/2,2),round(-depth/2+math.sin(i*math.pi/8)*depth/2,2)] for i in range(16)]
+        if isometric:
+            polygon=([[0,-depth/2],[width/2,0],[0,depth/2],[-width/2,0]] if kind=='crate' else
+                     [[round(math.cos(i*math.pi/8)*width/2,2),round(math.sin(i*math.pi/8)*depth/2,2)] for i in range(16)])
         staging=assets.scoped('.local/prop-builds/'+package_id,'.local/prop-builds')
         if staging.exists(): shutil.rmtree(staging)
         (staging/'inputs').mkdir(parents=True)
@@ -275,7 +293,7 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
         manifest={'schema':'studio.static-prop/0.1','id':package_id,'title':spec['title'],'asset_family':'static_prop',
                   'asset_kind':kind,'production_ready':False,'provenance':origin,'canvas_px':[size,size],
                   'image':'sprite.png','anchor_px':anchor,'sprite_offset_px':[-anchor[0],-anchor[1]],
-                  'view':'orthographic_three_quarter','processing':processing,
+                  'view':projection,'processing':processing,
                   'normalization':{'source_bbox_px':list(bbox),'content_px':list(dimensions),'offset_px':list(offset),
                                    'scale_factor':factor,'world_scale':'caller_defined'},
                   'suggested_collision':{'enabled_by_default':False,'suggestions_only':True,
@@ -285,6 +303,13 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
                                 'engine_physics':'not_tested','occlusion':'not_tested'},
                   'limitations':['只生产单个物件候选；连通区域检查不等于语义识别，不检查视角和风格是否符合游戏',
                                  '锚点与碰撞为可调整建议，不是AI识别的实际接触面','没有导航、交互、地图或游戏行为']}
+        if isometric:
+            manifest['projection']={**contract(),'artwork_transform':'none',
+                'anchor_role':'suggested_ground_footprint_center_and_y_sort_origin',
+                'suggested_footprint':{'width_px':round(dimensions[0]*profile['width_ratio'],2),
+                    'depth_px':round(dimensions[0]*profile['width_ratio']/2,2),'review':'pending_manual_review'},
+                'import_contract':'caller_declares_projection_not_automatically_verified'}
+            manifest['suggested_collision']['source']='editable_ground_footprint_heuristic_not_semantic'
         (staging/'INTEGRATION.md').write_text(
             '# 独立物件素材候选\n\n使用sprite.png（透明RGBA）。Sprite2D.centered=false，offset=sprite_offset_px；'
             '节点position是游戏中落脚点。PNG像素尺寸不代表世界单位。\n\n'
@@ -293,6 +318,11 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
             'preview.png是三种固定底色的边缘检查图；anchor_collision.png青色十字是锚点，橙色是建议碰撞。'
             'cutout.png保留裁切前抠图，inputs/original.png保留解码后原始图。原始提示词与参考图（如有）一并交付。'
             '单色抠图只从边界连通区域移除背景；近纯白与品红背景自动识别，边缘估算Alpha并校正残色。主体接近背景颜色、透明物或复杂内部空洞应使用透明PNG。\n',encoding='utf-8')
+        if isometric:
+            with (staging/'INTEGRATION.md').open('a',encoding='utf-8') as guide:
+                guide.write('\n等距规格为2:1斜二测，参考地格128×64，基向量(64,32)、(-64,32)。物件保持原始造型，程序不旋转或压扁图片。'
+                            '锚点初值为估算占地中心，Y排序使用该节点位置；请人工核对真实底面。'
+                            '投影标签是请求/导入声明，尚未自动验证绘图角度。碰撞和美术验收仍待确认。\n')
         manifest['files_sha256']={str(p.relative_to(staging)):hashlib.sha256(p.read_bytes()).hexdigest()
                                   for p in staging.rglob('*') if p.is_file()}
         atomic(staging/'manifest.json',manifest)

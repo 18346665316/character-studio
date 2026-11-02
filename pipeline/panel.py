@@ -473,7 +473,7 @@ def handler(panel):
             query = parse_qs(parsed.query)
             try:
                 if parsed.path in ('/','/app.js','/sequence.js','/workspace.js','/style.css',
-                                   '/terrain.html','/terrain.js','/terrain.css',
+                                   '/asset-workspace.js','/characters.html','/studio.css','/navigation.js','/hub.js','/terrain.html','/terrain.js','/terrain.css',
                                    '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
@@ -555,7 +555,7 @@ def handler(panel):
                 if parsed.path.startswith('/terrain-asset/'):
                     relative = unquote(parsed.path[len('/terrain-asset/'):])
                     parts = relative.split('/')
-                    if len(parts) != 2 or parts[1] not in ('atlas.png','ground_material.png','road_material.png','preview.png','kit.zip'):
+                    if len(parts) != 2 or parts[1] not in ('atlas.png','ground_material.png','road_material.png','preview.png','isometric_atlas.png','isometric_preview.png','kit.zip'):
                         raise ValueError('无效套件资源')
                     path = panel.scoped('terrain-kits/'+name(parts[0])+'/'+parts[1], 'terrain-kits')
                     if parts[1]=='kit.zip':

@@ -1,11 +1,11 @@
 'use strict';
 // Task-oriented presentation. Rendering, validation and durable jobs stay in the pipeline.
 let libraryOpen=true,activePage='character';
-const pageLabels={character:'人物',actions:'动作',equipment:'装备',sheets:'交付',sequence:'编排'};
-const pageDescriptions={character:'确认人物外观与骨骼，建立可复用的角色。',actions:'管理 Mixamo 原动作，检查姿态与变形。',equipment:'管理武器模型，设置人物握持与动作中的持用状态。',sheets:'生成、检查、精简和下载游戏图集。',sequence:'组织原动作，生成统一取景的连续预览。'};
-function pageFor(value){return ({model:'character',rig:'character',animation:'actions',equipment:'equipment',weapon:'equipment',sheet:'sheets',quality:'sheets',sequence:'sequence',actions:'actions',sheets:'sheets',action_set_advanced:'sheets',weapons:'equipment'})[value.type]||'character';}
+const pageLabels={character:'模型',rig:'骨骼绑定',sheets:'动作与交付'};
+const pageDescriptions={rig:'完成骨骼绑定，检查关节变形。',character:'确认人物外观与骨骼，建立可复用的角色。',actions:'管理 Mixamo 原动作，检查姿态与变形。',equipment:'管理武器模型，设置人物握持与动作中的持用状态。',sheets:'生成、检查、精简和下载游戏图集。',sequence:'组织原动作，生成统一取景的连续预览。'};
+function pageFor(value){return ({model:'character',rig:'rig',animation:'actions',equipment:'equipment',weapon:'equipment',sheet:'sheets',quality:'sheets',sequence:'sequence',actions:'actions',sheets:'sheets',action_set_advanced:'sheets',weapons:'equipment'})[value.type]||'character';}
 function goPage(page){
- const types={character:'model',actions:'actions',equipment:'equipment',sheets:'sheets',sequence:'sequence'};
+ const types={character:'model',rig:'rig',actions:'actions',equipment:'equipment',sheets:'sheets',sequence:'sequence'};
  choose({type:types[page]});
 }
 function showLibrary(){libraryOpen=true;stopPlayback();$('workspace').hidden=true;$('empty').hidden=false;renderCharacterLibrary();}
@@ -29,7 +29,14 @@ function contextNext(c){
 }
 function renderSetup(c){
  $('setup-bar')?.remove();
- const nav=$('workspace-nav');nav.replaceChildren();for(const [i,[page,title]]of Object.entries(pageLabels).entries()){const b=button('',()=>goPage(page),'page-nav'+(activePage===page?' selected':''));b.setAttribute('aria-current',activePage===page?'page':'false');b.append(node('span',String(i+1).padStart(2,'0'),'nav-number'),node('span',title));nav.append(b);}
+ const nav=$('workspace-nav');nav.replaceChildren();
+ const states={character:c.model_approved?'已确认':c.prepared?'待确认':'待制作',rig:c.rig.ready?'已完成':'待绑定',actions:c.batches.some(b=>b.current_rig)?'已有动作':'待添加',sheets:c.action_set?'已有动作集':'待生成'};
+ for(const [i,[page,title]]of Object.entries(pageLabels).entries()){
+  const b=button('',()=>goPage(page),'page-nav'+(activePage===page?' selected':''));b.setAttribute('aria-current',activePage===page?'page':'false');
+  const copy=node('span',undefined,'nav-step-copy');copy.append(node('span',title),node('small',states[page]));b.append(node('span',String(i+1).padStart(2,'0'),'nav-number'),copy);nav.append(b);
+ }
+ nav.append(node('span','辅助工具','workspace-tool-label'));
+ for(const [page,title]of [['actions','原动作检查'],['equipment','装备与武器'],['sequence','动作编排']]){const b=button(title,()=>goPage(page),'page-nav auxiliary'+(activePage===page?' selected':''));b.setAttribute('aria-current',activePage===page?'page':'false');nav.append(b);}
  $('home-link').onclick=showLibrary;$('back-library').onclick=showLibrary;
 }
 function detail(){ $('detail-layout').hidden=false; }
@@ -43,7 +50,7 @@ function renderWorkspace(force=false){
  // Keep focused form controls intact during background polling.
  if(!force&&$('controls').contains(document.activeElement)&&['INPUT','SELECT'].includes(document.activeElement?.tagName))return;
  viewKey=signature;stopPlayback();$('delivery-action-list')?.remove();$('detail-layout').classList.remove('delivery-layout');$('page-library').replaceChildren();$('page-tabs').replaceChildren();$('preview-content').replaceChildren();$('controls').replaceChildren();$('preview-meta').textContent='';$('viewport-note').textContent='';$('detail-layout').hidden=true;
- if(activePage==='character'){detail();tab('模型与外观',()=>choose({type:'model'}),selection.type!=='rig');tab('骨骼绑定',()=>choose({type:'rig'}),selection.type==='rig');if(selection.type==='rig')renderRig(c);else renderModel(c);}
+ if(activePage==='character'||activePage==='rig'){detail();if(activePage==='rig')renderRig(c);else renderModel(c);}
  else if(activePage==='actions'){if(selection.type==='animation'){detail();tab('← 动作库',()=>goPage('actions'),false);renderAnimation(c);}else renderActionLibrary(c);}
  else if(activePage==='equipment')renderEquipmentWorkspace(c);
  else if(activePage==='sheets'){if(selection.type==='quality')tab('← 返回交付',()=>goPage('sheets')); if(selection.type==='quality'){detail();renderQuality(c);}else if(selection.type==='action_set_advanced'){tab('← 整套生产',()=>goPage('sheets'));renderActionSetAdvanced(c);}else if(selection.type==='sheet'){tab('← 角色动作集',()=>goPage('sheets'));detail();renderSheet(c);}else renderActionSet(c);}
@@ -51,7 +58,8 @@ function renderWorkspace(force=false){
 }
 function renderActionLibrary(c){
  const root=$('page-library'),rows=animationResources(c),query=prefs().actionQuery||'';
- root.append(sectionHeading('动作库',`${rows.length} 个动作 · 原动作与生成的图集分别管理。`,button('＋ 添加 Mixamo 动作',openAdd,'primary',blocked()||!c.rig.ready)));
+ root.append(sectionHeading('原动作检查','这里用于修正朝向、检查变形或单独重做动作。常规制作可直接配置整套动作。',button('前往整套动作生产',()=>goPage('sheets'),'primary')));
+ root.append(sectionHeading('原动作来源',`${rows.length} 个动作 · 原动作与生成的图集分别管理。`,button('＋ 添加 Mixamo 动作',openAdd,'primary',blocked()||!c.rig.ready)));
  const search=node('input');search.type='search';search.placeholder='搜索动作标题';search.value=query;search.setAttribute('aria-label','搜索动作');const grid=node('div',undefined,'asset-grid');
  const paint=()=>{grid.replaceChildren();for(const a of rows.filter(a=>animationTitle(a.batch,a.file).toLowerCase().includes(search.value.toLowerCase()))){const card=node('article',undefined,'asset-card'),approved=animationApproved(c,a.batch,a.file),review=reviewFor(c,a.batch),pose=review?.images.find(i=>i.name.startsWith(a.key+'_'));const art=node('button',undefined,'asset-art');art.type='button';art.setAttribute('aria-label','检查动作 '+animationTitle(a.batch,a.file));if(pose){const img=node('img');img.src=pose.url;img.alt=animationTitle(a.batch,a.file)+'姿态检查';img.loading='lazy';art.append(img);}else art.append(node('span','▷','asset-symbol'));art.onclick=()=>choose({type:'animation',key:a.key,version:a.id});
  const body=node('div',undefined,'asset-copy');body.append(tag(!a.batch.current_rig?'历史绑定':approved?'已确认':'待检查',approved?'good':'warning'),node('h3',animationTitle(a.batch,a.file)),...(a.batch.action_roles?.[a.file]?[tag(ROLE_LABELS[a.batch.action_roles[a.file]]||a.batch.action_roles[a.file])]:[]),node('p',`来源 ${sourceTime(a.batch.id)}${a.versions.length>1?' · '+a.versions.length+' 个来源版本':''}`,'muted'));const actions=node('div',undefined,'card-actions');actions.append(button('检查动作',art.onclick),button('生成图集',()=>openExport(a.batch.id,[a.file]),'primary',blocked()||!a.batch.current_rig||!approved));body.append(actions);card.append(art,body);grid.append(card);}if(!grid.childElementCount)grid.append(placeholder('没有匹配的动作','尝试其他标题，或添加 Mixamo 原动作。'));};
@@ -232,6 +240,28 @@ function renderActionSetAdvanced(c){
 
 // The primary workflow produces a whole set. Individual adoption remains advanced.
 const productionDrafts=new Map();
+
+const productionReviews=new Map();
+function renderProductionReview(c,role,root,available){
+ let draft=productionReviews.get(c.id);
+ if(!draft){draft={revision:c.action_set.revision,checks:{}};productionReviews.set(c.id,draft);}
+ const changed=Object.keys(draft.checks).some(r=>draft.checks[r]!==!!c.action_set.actions[r]?.reviewed),conflict=draft.revision!==c.action_set.revision;
+ if(conflict&&!changed){draft={revision:c.action_set.revision,checks:{}};productionReviews.set(c.id,draft);}
+ const box=node('section',undefined,'production-review');box.append(node('h3','当前采用成果 · 人工检查'));
+ const choice=c.action_set.actions[role];
+ if(choice){const checkbox=node('input');checkbox.type='checkbox';checkbox.checked=draft.checks[role]??!!choice.reviewed;checkbox.disabled=!available||blocked()||draft.revision!==c.action_set.revision;checkbox.onchange=()=>{draft.checks[role]=checkbox.checked;renderWorkspace(true);};const label=node('label',undefined,'check-row');label.append(checkbox,node('span','已检查此动作的姿态、风格和循环 / 结束效果'));box.append(label);}
+ const checked=Object.entries(c.action_set.actions).filter(([r,a])=>draft.checks[r]??a.reviewed).length;
+ box.append(node('p',`${checked} / ${Object.keys(c.action_set.actions).length} 个动作已检查。结构检查与人工检查分别记录，未检查项会在交付报告中标记。`));
+ if(draft.revision!==c.action_set.revision){box.append(note('动作集已在其他操作中更新。请重新载入检查状态后再保存。'),button('载入最新检查状态',()=>{productionReviews.delete(c.id);renderWorkspace(true);}));}
+ else box.append(button('保存检查状态',async()=>{
+  if(blocked())return;busy=true;
+  try{const actions=JSON.parse(JSON.stringify(c.action_set.actions));for(const [r,value]of Object.entries(draft.checks))if(actions[r])actions[r].reviewed=value;
+   await api('/api/action-set',{character:c.id,...c.action_set,actions,revision:draft.revision});productionReviews.delete(c.id);if(actionSetDrafts.has(c.id)&&setRecipeKey(actionSetDrafts.get(c.id))===setRecipeKey(c.action_set))actionSetDrafts.delete(c.id);notify('检查状态已保存。');await refresh(true);
+  }catch(e){notify(e.message,true);}finally{busy=false;renderWorkspace(true);}
+ },'primary',blocked()||!changed));
+ root.append(box);
+}
+
 function productionConfig(value){return {title:value.title||'角色动作集',actions:value.actions,renderer:value.renderer||'godot',view:value.view||'three_quarter',body_height:value.body_height||96,supersample:value.supersample||4,colors:value.colors??64,profile:value.profile||'balanced',equipment_id:value.equipment_id||null};}
 function productionDraft(c){
  if(!productionDrafts.has(c.id)){const preset=state.action_presets?.[0];productionDrafts.set(c.id,c.production?.config?JSON.parse(JSON.stringify(productionConfig(c.production.config))):productionConfig({actions:(preset?.actions||[{role:'idle',title:'Breathing Idle',loop_intent:true},{role:'walk',title:'Walking',loop_intent:true},{role:'run',title:'Running',loop_intent:true},{role:'jump',title:'Standing Jump',loop_intent:false}]).map(a=>({role:a.role,title:a.title,loop:a.loop_intent}))}));}
@@ -267,6 +297,7 @@ function renderActionSet(c){
  if(running){const live=node('div',c.progress?.message||'正在启动整套生产任务…','callout');live.id='production-live-progress';content.append(live);}
  if(failed){const errors=Object.entries(job.outputs?.production?.roles||{}).filter(([,r])=>r.status==='failed');for(const [r,item]of errors)content.append(node('div',r+'：'+item.error,'callout'));if(!errors.length)content.append(node('div',job.error||'任务中断，可继续。','callout'));}
  if(entry?.shown)content.append(note((running?'生成期间显示上一套已发布成果。':failed?'当前为本次已完成的候选结果，正式动作集保持不变。':configChanged?'当前显示已发布成果，修改后的方案在生成完成后生效。':'切换左侧动作检查整套效果。')+' 十字线是统一脚底位置。'));
+ if(c.action_set&&result===c.action_set&&!running)renderProductionReview(c,role,content,!!entry?.shown);
  const title=node('input');title.value=draft.title;title.onchange=()=>{draft.title=title.value;renderWorkspace(true);};controls.append(field('动作集名称',title));
  const change=(key,value)=>{draft[key]=value;renderWorkspace(true);};
  controls.append(field('人物像素高度',select([[48,'48px'],[64,'64px'],[96,'96px（推荐）'],[128,'128px']],draft.body_height,v=>change('body_height',Number(v)))),field('视角',select([['three_quarter','四分之三'],['front','正面'],['side','侧面']],draft.view,v=>change('view',v))),field('整套颜色',select([[0,'保留原色'],[32,'共享 32 色'],[64,'共享 64 色'],[128,'共享 128 色']],draft.colors,v=>change('colors',Number(v)))),field('帧精简',select([['balanced','推荐'],['smooth','更多细节'],['compact','更少帧']],draft.profile,v=>change('profile',v))),field('装备',select([['','空手'],...c.equipment.map(e=>[e.id,e.weapon_name||'标准剑'])],draft.equipment_id||'',v=>change('equipment_id',v||null))));
@@ -275,6 +306,6 @@ function renderActionSet(c){
  controls.append(note(!c.rig.ready?'先完成人物骨骼绑定。绑定后，动作生产可一次完成。':'自动复用已有原动作与本流程的渲染缓存；只下载缺失动作。共享配色后分别精简，全部通过结构检查再发布。'));
  if(c.action_set&&c.action_set_validation?.complete&&!running&&!failed)controls.append(link(configChanged?'导出已发布人物包':'导出整套 Godot 人物包','/api/action-set/export?character='+encodeURIComponent(c.id)));
  if(c.action_set&&!running&&!failed)controls.append(details('整套检查报告',...(c.action_set_validation?.errors||[]).map(note),...(c.action_set_validation?.warnings||[]).map(note)));
- controls.append(details('高级管理',button('管理采用版本与单动作验收',()=>choose({type:'action_set_advanced'}),'full'),button('浏览已有图集',()=>{const groups=sheetGroups(c);if(groups.length){const v=groups[0].versions[0];choose({type:'sheet',delivery:v.delivery.id,clip:v.item.name});}else openExport();},'full')));
+ controls.append(details('高级管理',button('管理采用版本与播放方式',()=>choose({type:'action_set_advanced'}),'full'),button('浏览已有图集',()=>{const groups=sheetGroups(c);if(groups.length){const v=groups[0].versions[0];choose({type:'sheet',delivery:v.delivery.id,clip:v.item.name});}else openExport();},'full')));
  $('viewport-note').textContent='生成完成后仍需整体目视检查。Mixamo 首次登录与人工骨骼绑定不包含在自动生产中。';
 }

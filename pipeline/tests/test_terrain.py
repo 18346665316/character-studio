@@ -14,7 +14,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from asset_repository import atomic, read
-from terrain import (compile_kit, decode_image, execute, periodic, prepare, road_mask,
+from terrain import (digest, compile_kit, decode_image, execute, periodic, prepare, road_mask,
                      seam_report, validate, material_variants, natural_mask, variant_at)
 from terrain_images import generate_materials, Provider, SubmissionRejected
 
@@ -106,11 +106,24 @@ class TerrainTests(unittest.TestCase):
 
     def test_invalid_specs_and_images_rejected(self):
         for changes in [dict(tile_size=True),dict(tile_size=4096),dict(road_width=float('nan')),
-                        dict(mode='unknown'),dict(title=' '),dict(description='')]:
+                        dict(mode='unknown'),dict(title=' '),dict(description='',mode='ai')]:
             with self.assertRaises(ValueError): validate({**self.spec,**changes})
         for content in [None,'not base64',encoded(Image.new('RGB',(8,8))),
                         encoded(Image.new('RGBA',(64,64),(0,0,0,0)))]:
             with self.assertRaises(ValueError): decode_image(content)
+
+    def test_import_without_ai_inputs_preserves_source_and_never_generates(self):
+        data={**self.spec,'asset_type':'material','ground':encoded(self.random_image())}
+        data.pop('description')
+        with patch('terrain_images.generate_materials',side_effect=AssertionError('Unexpected charge')):
+            job=prepare(self.root,data)
+            execute(self.root,job['id'])
+        manifest=read(self.root/'terrain-kits'/job['id']/'manifest.json')
+        self.assertEqual(manifest['mode'],'import')
+        self.assertEqual(manifest['description'],'')
+        self.assertNotIn('reference.png',manifest['source_sha256'])
+        self.assertEqual(manifest['source_sha256']['ground.png'],
+                         digest(self.root/'.local/terrain/jobs'/job['id']/'inputs/ground.png'))
 
     def test_import_is_immutable_and_zip_contains_rules_sources_and_layers(self):
         data={**self.spec,'ground':encoded(self.random_image()),'road':encoded(self.random_image(2)),
