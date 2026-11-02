@@ -16,7 +16,7 @@ import zipfile
 
 from PIL import Image
 from asset_repository import AssetRepository, name, read, atomic
-from task_lock import acquire, serialized, TaskBusyError
+from task_lock import acquire, serialized, TaskBusyError, task_lock
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).parent / 'panel_ui'
@@ -54,10 +54,11 @@ class Panel(AssetRepository):
                 if job and job['status'] in ('queued', 'running'):
                     job.update(status='interrupted', error='任务进程已结束且未写入完成记录，可重试当前步骤。', finished_at=now())
                     atomic(path, job)
-            for path in [p for family in ('terrain','components','props')
+            for path in [p for family in ('terrain','components','props','buildings')
                          for p in (self.root/('.local/'+family+'/jobs')).glob('*/job.json')]:
                 job = read(path)
                 if job and job['status'] in ('queued', 'running'):
+                    if 'buildings' in path.parts: job['revision']=job.get('revision',0)+1
                     job.update(status='failed', stage='任务进程已结束，可继续任务',
                                error='任务中断；继续时复用已保存的远程图片任务和材质。')
                     atomic(path, job)
@@ -103,6 +104,40 @@ class Panel(AssetRepository):
             return job
         finally:
             os.close(fd)
+
+    def start_building(self, data):
+        from building_pipeline import new_attempt, require_job, attempt_folder, recovery
+        fd = self.worker_lock()
+        if fd is None: raise TaskBusyError('已有生产任务运行，请等待完成')
+        try:
+            with task_lock(self.root, inherited_fd=fd):
+                if data.get('resume'):
+                    folder, job = require_job(self.root, data['resume'])
+                    if job['status'] != 'failed': raise ValueError('仅能继续失败或中断的建筑任务')
+                    if data.get('revision') != job['revision']: raise ValueError('任务已更新，请刷新')
+                    mode = recovery(folder, attempt_folder(folder, job['current_attempt']))
+                    if mode in ('uncertain', 'remote_failed', 'invalid'): raise ValueError('当前回执不能安全继续，请核实服务商记录或创建明确的新尝试')
+                    if mode == 'unsubmitted' and data.get('submit_unsubmitted') is not True:
+                        raise ValueError('尚未提交；请明确发起生成（可能产生费用）')
+                    job.update(status='queued', execution_mode='submit' if mode == 'unsubmitted' else 'resume', stage='等待提交生成' if mode == 'unsubmitted' else '等待恢复原任务', error=None)
+                    job['revision'] += 1
+                    atomic(folder/'job.json',job)
+                else:
+                    job = new_attempt(self.root, data.get('task'), data.get('revision'), data.get('correction',''), data.get('mode','fresh'), data.get('source_attempt'))
+                    folder, _ = require_job(self.root,job['id'])
+                try:
+                    with (folder/'worker.log').open('ab') as log:
+                        child = subprocess.Popen([str(self.root/'.local/python/bin/python3'),
+                            str(self.root/'pipeline/building_worker.py'),job['id'],str(fd)],
+                            cwd=self.root,stdout=log,stderr=subprocess.STDOUT,pass_fds=(fd,),
+                            env={**os.environ,'PYTHONUNBUFFERED':'1'},start_new_session=True)
+                        self.children.append(child)
+                except OSError:
+                    job.update(status='failed',stage='启动失败',error='无法启动建筑工作进程')
+                    atomic(folder/'job.json',job)
+                    raise
+                return job
+        finally: os.close(fd)
 
     def jobs(self):
         """Read task history without changing task receipts."""
@@ -477,16 +512,58 @@ def handler(panel):
                                    '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
-                if parsed.path in ('/components.html','/components.js','/props.html','/props.js'):
+                if parsed.path in ('/building-structure.html','/building-structure.js','/buildings.html','/buildings.js','/components.html','/components.js','/props.html','/props.js'):
                     file=STATIC/parsed.path[1:]
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
-                if parsed.path == '/api/props/state':
-                    from static_props import catalog, KINDS
-                    from terrain_images import configured
+                if parsed.path == '/api/image-provider':
+                    from image_provider_settings import state
+                    return self.respond({**state(panel.root), 'token':panel.token})
+                if parsed.path == '/api/buildings/state':
+                    from building_pipeline import catalog
+                    from terrain_images import configured, provider_info
                     with panel.mutex:
                         panel.recover_jobs()
                         result=catalog(panel.root)
-                    result.update(token=panel.token,image_api_configured=configured(panel.root),kinds=KINDS)
+                    from building_templates import catalog as template_catalog
+                    result['templates']=template_catalog(panel.root)
+                    result.update(token=panel.token,image_api_configured=configured(panel.root), **provider_info(panel.root))
+                    return self.respond(result)
+                if parsed.path == '/api/buildings/template-file':
+                    from building_templates import load
+                    folder,_=load(panel.root,query.get('id',[''])[0])
+                    return self.respond((folder/'outline.png').read_bytes(),'image/png')
+                if parsed.path == '/api/buildings/file':
+                    from building_pipeline import require_job, attempt_folder
+                    task=query.get('task',[''])[0]; kind=query.get('kind',[''])[0]
+                    folder, job=require_job(panel.root,task)
+                    structural={'reference':'structure/reference.png','inspection':'structure/inspection.png',
+                                'structure':'structure/structure.json','style':'style.png'}
+                    if job.get('workflow') == 'line_drawing': structural['reference']='outline.png'
+                    attempt_files={'raw':'raw.png','sprite':'sprite.png','comparison':'comparison.png',
+                                   'preview':'preview.png','checks':'checks.json','receipt':'generation.json'}
+                    if kind in structural: path=folder/structural[kind]
+                    elif kind in attempt_files:
+                        attempt=query.get('attempt',[job['current_attempt']])[0]
+                        if attempt not in job['attempts']: raise ValueError('生成尝试不存在')
+                        path=attempt_folder(folder,attempt)/attempt_files[kind]
+                    else: raise ValueError('建筑资源类型无效')
+                    if not path.is_file(): raise ValueError('此阶段尚无对应文件')
+                    return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path.startswith('/building-asset/'):
+                    from building_pipeline import load_package
+                    parts=unquote(parsed.path[len('/building-asset/'):]).split('/')
+                    if len(parts)!=2 or parts[1] not in ('sprite.png','preview.png','kit.zip','manifest.json'):
+                        raise ValueError('建筑资源路径无效')
+                    load_package(panel.root,parts[0])
+                    path=panel.scoped('building-kits/'+name(parts[0])+'/'+parts[1],'building-kits')
+                    return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path == '/api/props/state':
+                    from static_props import catalog, KINDS
+                    from terrain_images import configured, provider_info
+                    with panel.mutex:
+                        panel.recover_jobs()
+                        result=catalog(panel.root)
+                    result.update(token=panel.token,image_api_configured=configured(panel.root),kinds=KINDS, **provider_info(panel.root))
                     return self.respond(result)
                 if parsed.path.startswith('/prop-asset/'):
                     from static_props import load_package
@@ -503,11 +580,11 @@ def handler(panel):
                 if parsed.path == '/api/components/state':
                     from fence_components import catalog
                     from component_jobs import catalog as jobs
-                    from terrain_images import configured
+                    from terrain_images import configured, provider_info
                     with panel.mutex:
                         panel.recover_jobs()
                         result={'kits':catalog(panel.root),'jobs':jobs(panel.root),'token':panel.token,
-                                'image_api_configured':configured(panel.root)}
+                                'image_api_configured':configured(panel.root), **provider_info(panel.root)}
                     return self.respond(result)
                 if parsed.path.startswith('/component-asset/'):
                     from fence_components import load_package
@@ -519,22 +596,27 @@ def handler(panel):
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
                 if parsed.path == '/api/terrain/state':
                     from terrain import catalog
-                    from terrain_images import configured, load_config, DEFAULT_BASE
+                    from terrain_images import configured, load_config, DEFAULT_BASE, provider_info
                     with panel.mutex:
                         panel.recover_jobs()
                         result = catalog(panel.root)
                         from terrain_transition import catalog as transition_catalog
                         result['transitions']=transition_catalog(panel.root)
                     result.update(token=panel.token, image_api_configured=configured(panel.root),
-                                  image_base_url=load_config(panel.root).get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE))
+                                  image_base_url=('https://aiplatform.googleapis.com' if provider_info(panel.root)['image_provider']=='google_cloud' else load_config(panel.root).get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE)), **provider_info(panel.root))
                     return self.respond(result)
-                if parsed.path in ('/api/terrain/job-log','/api/components/job-log','/api/props/job-log'):
+                if parsed.path in ('/api/terrain/job-log','/api/components/job-log','/api/props/job-log','/api/buildings/job-log'):
                     from terrain_images import load_config
                     identity=name(query.get('id',[''])[0])
                     family=parsed.path.split('/')[2]
                     storage='.local/'+family+'/jobs/'
-                    path=panel.scoped(storage+identity+'/http.jsonl',storage+identity)
-                    if not (path.parent/'job.json').is_file(): raise ValueError('任务不存在')
+                    job=read(panel.scoped(storage+identity+'/job.json',storage+identity))
+                    if not job: raise ValueError('任务不存在')
+                    if family=='buildings':
+                        attempt=query.get('attempt',[job.get('current_attempt')])[0]
+                        if attempt not in job.get('attempts',[]): raise ValueError('生成尝试不存在')
+                        path=panel.scoped(storage+identity+'/attempts/'+name(attempt)+'/http.jsonl',storage+identity)
+                    else: path=panel.scoped(storage+identity+'/http.jsonl',storage+identity)
                     events=[]
                     config=load_config(panel.root)
                     # Only structured transport fields are exposed, never worker output or payloads.
@@ -635,7 +717,36 @@ def handler(panel):
                     raise ValueError('无效的请求结构')
                 with panel.mutex:
                     route = urlparse(self.path).path
-                    if route == '/api/props/generate':
+                    if route == '/api/image-provider':
+                        from image_provider_settings import switch
+                        result=switch(panel.root,data)
+                    elif route == '/api/buildings/templates/save':
+                        from building_templates import save
+                        result=save(panel.root,data)
+                    elif route == '/api/buildings/templates/prepare':
+                        from building_templates import prepare
+                        with task_lock(panel.root):result=prepare(panel.root,data)
+                    elif route == '/api/buildings/prepare':
+                        from building_pipeline import prepare
+                        result=prepare(panel.root,data)
+                    elif route == '/api/buildings/generate':
+                        result=panel.start_building(data)
+                    elif route == '/api/buildings/review':
+                        from building_pipeline import review
+                        result=review(panel.root,data.get('task'),data.get('revision'),data.get('checks'),data.get('note',''),data.get('action','decide'))
+                    elif route == '/api/buildings/adjust':
+                        from building_pipeline import adjust
+                        result=adjust(panel.root,data)
+                    elif route == '/api/buildings/select':
+                        from building_candidates import select
+                        result=select(panel.root,data)
+                    elif route == '/api/buildings/save':
+                        from building_candidates import save
+                        result=save(panel.root,data)
+                    elif route == '/api/buildings/publish':
+                        from building_pipeline import publish
+                        result=publish(panel.root,data.get('task'),data.get('revision'))
+                    elif route == '/api/props/generate':
                         result=panel.start_terrain(data,props=True)
                     elif route == '/api/props/remake':
                         from static_props import remake

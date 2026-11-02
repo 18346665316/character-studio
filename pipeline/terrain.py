@@ -376,7 +376,7 @@ def prepare(root, data):
     if spec['mode'] == 'ai':
         from terrain_images import configured
         if not configured(root):
-            raise ValueError('启动 Studio 前请配置 STUDIO_IMAGE_API_KEY 或 OPENAI_API_KEY，勿将密钥填入描述')
+            raise ValueError('请在项目.env配置图片服务（兼容接口或Google Cloud Vertex AI），勿将凭据填入描述')
     images = {}
     parent_generation=None
     if spec['mode']=='reuse':

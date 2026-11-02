@@ -1,0 +1,2 @@
+# Optional Google Cloud Vertex AI adapter; uses REST for paid image requests.
+google-auth[requests]>=2.29,<3

@@ -1,0 +1,20 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · 建筑</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/terrain.css"><link rel="stylesheet" href="/studio.css"><script src="/navigation.js" defer></script><script src="/buildings.js" defer></script></head><body>
+<nav id="studio-navigation" aria-label="主导航"></nav>
+<header class="terrain-header"><div><span class="eyebrow">BUILDING PRODUCTION</span><h1>建筑素材</h1><p>原始框线图 ＋ 建筑风格 → 生成与挑选 → 标定与保存</p></div></header>
+<main class="building-workspace"><p id="building-message" role="status" hidden></p>
+<details id="building-template-settings" class="terrain-card"><summary>建筑设置 · 线框模板</summary><p>先制作并检查建筑形体与视角，保存为模板，再复用模板生成不同风格。模板不包含材质和配色。</p>
+<form id="template-form"><label for="template-name">模板名称</label><input id="template-name" required maxlength="60" placeholder="例如：等距双层旅馆">
+<label for="template-method">模板来源</label><select id="template-method"><option value="generate">AI 生成线框候选</option><option value="upload">导入已有线框图</option></select>
+<label for="template-view">模板视角</label><select id="template-view"><option value="isometric_2_1">2:1 等距地格 · 本项目推荐</option><option value="isometric_true">严格等轴测 · 地面轴线30°</option><option value="custom">沿用原图视角（仅导入）</option></select>
+<div id="template-generation"><label for="template-description">建筑形体描述</label><textarea id="template-description" maxlength="2000" rows="3" placeholder="例如：两层矩形旅馆，双坡屋顶，正面一个入口，两侧窗户"></textarea><p>这里只描述结构；系统附加正交视角与线框绘制规则。AI不能保证投影准确，保存前需要检查。</p></div>
+<div id="template-upload" hidden><label for="template-file">模板线框图</label><input id="template-file" type="file" accept="image/png,image/jpeg,image/webp"><label><input id="template-confirmed" type="checkbox">我已检查原图的视角、建筑轮廓与留白</label></div>
+<button id="template-submit" type="submit">生成线框候选（可能产生费用）</button></form><div id="building-template-library"></div></details>
+<form id="building-form" class="terrain-card"><h2>框线图与建筑风格</h2><p>框线图提供建筑形体、比例与视角。提示词只描述材质、配色和画风。</p>
+<label for="building-title">名称</label><input id="building-title" required maxlength="60" placeholder="例如：村口旅馆">
+<label for="building-template">建筑模板</label><select id="building-template"><option value="">本次上传框线图</option></select><p id="building-template-info" class="terrain-hint">也可在上方“建筑设置”保存可复用模板。</p>
+<div id="building-upload"><label for="building-drawing">原始建筑框线图</label><input id="building-drawing" type="file" accept="image/png,image/jpeg,image/webp" required><p class="terrain-hint">上传完整单栋建筑的框线图，四周留白。生成后仍需挑选符合原图的结果。</p></div><img id="drawing-preview" class="surface-preview building-drawing" alt="原始框线图预览" hidden>
+<label for="building-appearance">风格提示词（材质、配色、画风）</label><textarea id="building-appearance" required maxlength="2000" rows="4" placeholder="例如：浅色灰泥与深棕木材、暖红陶瓦，低对比手绘游戏画风"></textarea>
+<p id="building-api-hint" class="terrain-hint">每次生成一张候选，调用项目图片服务，可能产生费用。不会自动循环生成。</p>
+<button type="submit" class="primary" id="building-create" data-generate="true">生成第一个候选（可能产生费用）</button><button type="submit">仅保存生成方案</button>
+<details><summary>辅助工具</summary><a href="/building-structure.html">参数化结构参考工具</a></details></form>
+<section id="building-task" hidden></section><section id="building-kit" hidden></section></main></body></html>

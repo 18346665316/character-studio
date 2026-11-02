@@ -110,4 +110,5 @@
  };
  setInterval(()=>{if(!busy)refresh().catch(e=>status(e.message,true));},4000);
  refresh().catch(e=>status(e.message,true));
+ window.addEventListener('studio-image-provider-changed',()=>{if(!busy)Promise.resolve(refresh()).catch(()=>{});});
 })();

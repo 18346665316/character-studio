@@ -116,7 +116,7 @@ def prepare(root,data):
     return job
 
 
-def cutout(image):
+def cutout(image, *, adaptive_magenta=False):
     """Keep supplied alpha, or remove border-connected magenta / near-white.
 
     Background removal requires foreground/background color separation. It is not
@@ -137,11 +137,36 @@ def cutout(image):
                and np.mean(np.max(np.abs(edges-white_key),axis=1)<=8)>=.98)
     key=white_key if white else np.array([255,0,255])
     tolerance=12 if white else 55
+    sampled=False
+    keyed_frame=False
+    if adaptive_magenta and not white:
+        # Some generators render the chroma key as muted pink. Accept only a
+        # uniform magenta-family border, never an arbitrary scene background.
+        sample_key=white_key
+        sample_edges=edges
+        # A generator may add a one-pixel dark pink canvas rim. Require a
+        # uniform inner safety band before treating that rim as background.
+        if min(h,w)>16:
+            inner=np.concatenate((rgb[1:4,4:-4].reshape(-1,3),rgb[-4:-1,4:-4].reshape(-1,3),
+                                  rgb[4:-4,1:4].reshape(-1,3),rgb[4:-4,-4:-1].reshape(-1,3)))
+            inner_key=np.median(inner,axis=0)
+            pink_edges=(edges[:,0]-edges[:,1]>20)&(edges[:,2]-edges[:,1]>15)
+            if (np.mean(np.max(np.abs(inner-inner_key),axis=1)<=16)>=.98
+                    and np.mean(pink_edges)>=.98):
+                sample_key=inner_key;sample_edges=inner;keyed_frame=True
+        deviation=np.max(np.abs(sample_edges-sample_key),axis=1)
+        if (sample_key[0]-sample_key[1]>45 and sample_key[2]-sample_key[1]>35
+                and np.mean(deviation<=16)>=.98):
+            key=sample_key
+            tolerance=16
+            sampled=True
     distance=np.max(np.abs(rgb-key),axis=2)
     border=np.concatenate((distance[0],distance[-1],distance[:,0],distance[:,-1]))
-    if np.mean(border<=tolerance)<.98:
+    if not (sampled and keyed_frame) and np.mean(border<=tolerance)<.98:
         raise ValueError('背景未识别为近纯白或纯品红；请导入透明PNG，或使用四边留白的单色背景图')
     candidate=distance<=tolerance
+    if sampled and keyed_frame:
+        candidate[0,:]=True;candidate[-1,:]=True;candidate[:,0]=True;candidate[:,-1]=True
     removed=np.zeros((h,w),dtype=bool)
     queue=deque()
     for y,x in [(0,x) for x in range(w)]+[(h-1,x) for x in range(w)]+[(y,0) for y in range(h)]+[(y,w-1) for y in range(h)]:
@@ -156,9 +181,9 @@ def cutout(image):
     ring=dilated & ~removed
     foreground=rgb.astype(float)/255
     coverage=np.ones((h,w),dtype=float)
-    if white:
-        # Infer foreground color from the nearest interior pixel, then unmix the
-        # white matte in the boundary ring. Never erase white highlights inside.
+    if white or sampled:
+        # Infer foreground color from the nearest interior pixel, then unmix
+        # the sampled matte only in the boundary ring, preserving interiors.
         stable=np.asarray(Image.fromarray((~removed).astype('uint8')*255).filter(ImageFilter.MinFilter(7)))>0
         stable &= distance>36
         yy,xx=np.nonzero(ring)
@@ -186,7 +211,8 @@ def cutout(image):
     fraction=np.mean(coverage>.1)
     if not bbox or not .01<fraction<.85: raise ValueError('未识别到合理大小的单个物件，请检查原图')
     if min(bbox[0],bbox[1],w-bbox[2],h-bbox[3])<3: raise ValueError('物件接近画布边缘，可能被裁断')
-    return result,{'method':'border_connected_near_white_key' if white else 'border_connected_magenta_key',
+    return result,{'method':('border_connected_near_white_key' if white else
+                             'border_connected_sampled_magenta_key' if sampled else 'border_connected_magenta_key'),
                    'key_rgb':key.tolist(),'removed_fraction':round(float(removed.mean()),4),
                    'edge_color_correction':'3px_boundary_only','art_review':'pending',
                    'limitations':'仅适合主体与背景可区分的实心物件；白色主体可能与白底混淆。未做语义分割，内部孔洞和碎屑需人工检查'}

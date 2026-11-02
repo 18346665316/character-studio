@@ -1,0 +1,16 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · 建筑</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/terrain.css"><link rel="stylesheet" href="/studio.css"><script src="/navigation.js" defer></script><script src="/building-structure.js" defer></script></head><body>
+<nav id="studio-navigation" aria-label="主导航"></nav>
+<header class="terrain-header"><div><span class="eyebrow">BUILDING PRODUCTION</span><h1>参数化结构参考 · 辅助流程</h1><p>定义结构 → 确认结构并生成外观 → 复核 → 导出候选包</p></div><span>首轮 · 等距单层双坡屋顶</span></header>
+<main class="building-workspace">
+<p id="building-message" role="status" hidden></p>
+<form id="building-form" class="terrain-card"><h2>1 · 定义结构</h2><p>结构预览不调用 AI。建筑保持所选地格比例，画布随尺寸扩大。</p>
+<label for="building-title">名称</label><input id="building-title" required maxlength="60" placeholder="例如：村口木屋">
+<label for="building-cell">地格宽度（像素）</label><select id="building-cell"><option value="128">128 × 64</option><option value="64">64 × 32</option></select>
+<div class="terrain-fields"><label>占地长度（格）<input id="building-width" type="number" min="1" max="8" step="1" value="3" required></label><label>占地深度（格）<input id="building-depth" type="number" min="1" max="8" step="1" value="2" required></label><label>墙高（单位）<input id="building-height" type="number" min="0.5" max="4" step="0.05" value="1.5" required></label><label>屋顶升高（单位）<input id="building-rise" type="number" min="0.2" max="3" step="0.05" value="1" required></label></div>
+<p class="terrain-hint">高度每单位为地格宽度的一半像素。屋顶为双坡，以下选择屋脊沿哪条地格轴延伸。</p><label for="building-ridge">屋脊方向</label><select id="building-ridge"><option value="x">沿长度轴 ↘</option><option value="y">沿深度轴 ↙</option></select>
+<label for="building-overhang">屋檐超出墙体（格）</label><input id="building-overhang" type="number" min="0" max="0.5" step="0.05" value="0.2" required>
+<h3>入口</h3><p>入口用于接近建筑后切换室内场景，不会自动挖通碰撞。</p><label for="building-door-face">入口墙面</label><select id="building-door-face"><option value="+y">左侧可见墙面（+Y）</option><option value="+x">右侧可见墙面（+X）</option></select><div class="terrain-fields"><label>入口中心距墙面起点（格）<input id="building-door-center" type="number" min="0" max="8" step="0.05" value="1.5" required></label><label>门宽（格）<input id="building-door-width" type="number" min="0.15" max="4" step="0.05" value="0.6" required></label><label>门高（单位）<input id="building-door-height" type="number" min="0.15" max="4" step="0.05" value="1.05" required></label></div>
+<details><summary>窗户位置</summary><p>位置以所属墙面的起点计量。可删除所有窗户。</p><div id="building-windows"></div><button id="building-add-window" type="button">添加窗户</button></details>
+<button type="submit" class="primary">制作结构预览（不生图）</button></form>
+<section id="building-task" hidden></section><section id="building-kit" hidden></section>
+</main></body></html>

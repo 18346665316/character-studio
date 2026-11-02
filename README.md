@@ -4,7 +4,7 @@
 
 ## 工作台导航
 
-运行 `./studio panel` 后默认进入素材库。顶层导航分为「素材库」「制作素材」「生产任务」；素材按人物、地表、物件、连接构件分类，地面、道路、地表过渡、水面和水岸统一归入地表。
+运行 `./studio panel` 后默认进入素材库。顶层导航分为「素材库」「制作素材」「生产任务」；素材按人物、地表、物件、连接构件、建筑分类，地面、道路、地表过渡、水面和水岸统一归入地表。
 
 素材卡片直接打开对应成果，详情分为「预览」「调整」「来源与记录」，下载位于预览旁边；仅有实际编辑能力的素材显示调整入口。调整保留独立版本，相关版本按明确来源关系分组；没有来源关系的旧素材不自动归组。新建页不显示历史成果，任务完成后可直接查看本次成果。物件锚点与占地调整即时预览，切换相关版本或刷新会保留未保存草稿。
 
@@ -18,7 +18,7 @@
 
 运行 `./studio panel`，点击顶部「地面与道路」。输入风格参考图（可选）和描述，选择格子尺寸与道路宽度，生成一套固定正俯视素材：一种地面及16种四方向道路连接块。页面提供固定验收样例、历史套件和 ZIP 下载。不需要人物绑定或人物工作区。
 
-AI 使用用户提供的兼容接口 `https://api.kbsfdxc.net/v1`、`gpt-image-2`、1024×1024、high；每套生成两张基础材质，会产生服务商费用。首先生成地面，再将地面与原风格参考一起传入图片编辑接口生成道路材质。图片仅用于材质外观，道路宽度、转角和出口由程序制作。提示词保存在套件的 `generation.json`。
+默认兼容provider使用用户提供的接口 `https://api.kbsfdxc.net/v1`、`gpt-image-2`、1024×1024、high；每套生成两张基础材质，会产生服务商费用。首先生成地面，再将地面与原风格参考一起传入图片编辑接口生成道路材质。图片仅用于材质外观，道路宽度、转角和出口由程序制作。提示词保存在套件的 `generation.json`。
 
 在项目根目录的 `.env` 配置（此文件不入 Git）：
 
@@ -47,6 +47,36 @@ STUDIO_IMAGE_BASE_URL=https://api.kbsfdxc.net/v1
 「用当前材质重新制作」复用当前套件的原始输入及来源描述，用新的尺寸、道路宽度和画面处理生成独立版本，不调用 AI，不覆盖旧成果。来源输入哈希变化会阻止复用。
 
 边缘像素一致仅保证连接处没有像素跳变，不代表风格、尺度、道路过渡和纹理重复已通过美术验收。变化组只能减弱重复，仍需目视检查；暂不支持任意宽度地形、47块地形过渡和 Godot TileSet 自动配置。
+
+## Google Cloud Vertex AI 图片服务
+
+共用图片服务支持Google Cloud Vertex AI，可用于建筑框线图生图、地表材质、独立物件和围栏木纹。参考图作为Gemini图片输入传入；建筑仍以原始框线图提供形体，用户提示词只设定画风。当前默认Google模型为`gemini-2.5-flash-image`，不使用仅文生图的Imagen接口，也不通过Gemini Developer API。
+
+安装可选认证依赖：
+
+```bash
+.local/python/bin/python3 -m pip install -r pipeline/requirements-google-images.txt
+```
+
+凭据配置完成后，可在任意工作台页面顶栏的「图片服务」下拉框选择provider并点击「切换」。选择保存到本项目`.env`，无需重启或刷新整页，不清空表单输入。未配置的服务不可选；生产任务运行时阻止切换。若启动环境明确设置了`STUDIO_IMAGE_PROVIDER`，页面会说明由环境指定，需移除该启动变量并重启后再用网页切换。
+
+首次配置仍在本项目`.env`填写凭据：
+
+```dotenv
+STUDIO_IMAGE_PROVIDER=google_cloud
+STUDIO_GOOGLE_IMAGE_MODEL=gemini-2.5-flash-image
+GCP_PROJECT_ID=your-google-cloud-project
+GCP_LOCATION=us-central1
+GOOGLE_APPLICATION_CREDENTIALS=.local/auth/google-cloud/service-account.json
+```
+
+相对凭据路径以本项目根目录为准。也支持`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`别名。明确设置服务账号文件时优先使用该文件，不修改进程环境；留空时使用Google Application Default Credentials（需指定项目）。服务账号需要Vertex AI调用权限，项目需启用相应服务与账单，实际模型/区域支持及配额以Google Cloud项目为准。
+
+本机已沿用ADK项目的服务账号，将凭据保存在被Git忽略的`.local/auth/google-cloud/`，并完成真实OAuth认证验证。原兼容接口密钥仍保留在本机`.env`；切回原服务可在顶栏选择「兼容接口」，也可手动设置`STUDIO_IMAGE_PROVIDER=openai_compatible`。`.env`与服务账号不得纳入交付包。
+
+Google生成同步返回，系统保存实际provider、模型与来源指纹；后台运行不受页面关闭影响。网络超时但没有结果时不自动重发，因同步接口没有可续查的远程图片任务ID，必须先核实服务商记录。改变provider/模型后不能继续查询原服务的未完成任务，应恢复原配置；已有可信原图的建筑后处理可免费继续。页面显示所选provider和模型，配置可用不等于已通过实际生图验收。
+
+适配参考：[Vertex AI Gemini图片生成](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-generation)、[Gemini 2.5 Flash Image](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-image)。
 
 ## 目录边界
 
@@ -415,3 +445,7 @@ Studio 顶部「独立物件」现提供单个石头候选生产：参考图（�
 - 投影规格属于生产约束，尚未自动识别图像是否符合角度。旧包不修改，调整另存版本。人物的真实等距朝向动画、连接构件和多层遮挡尚未加入。
 
 独立接入验证见 `demo/isometric/README.md`，可使用真实等距物件包；默认物件是明确标注的程序几何样本，用于运行和渲染验证，不代表AI生成的美术效果。
+
+### 建筑素材生产
+
+「制作素材 → 建筑素材」可选择已保存建筑模板，或上传原始框线图，再填写风格提示词。页内“建筑设置 · 线框模板”支持导入母版，或指定2:1等距/严格等轴测视角生成线框候选，经人工检查后保存复用。框线图提供建筑形体和视角，提示词只设定材质、配色与画风。每次生成一张候选，不满意可使用相同输入再次生成，并列挑选；自动透明处理失败保留原图，允许放弃该候选继续生成，不要求局部编辑或修图。选定后标记实际占地、落地锚点和可选入口，等比例确定输出尺度，再保存独立素材包。碰撞建议默认关闭，人物比例、遮挡与游戏接入待验证。原参数化结构参考和旧任务保留在辅助入口。详见[建筑生产流水线](docs/building-pipeline.md)。

@@ -21,4 +21,5 @@ StudioAssets.jobsLoaded(state.jobs||[]);$('component-history').replaceChildren()
  async function readFile(file){if(file.size>8*1024*1024)throw Error('图片不得超过8MB');return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('图片读取失败'));reader.readAsDataURL(file);});}
  setInterval(()=>{if(!busy&&state?.jobs?.some(j=>['queued','running'].includes(j.status)))refresh().catch(e=>status(e.message,true));},4000);
  refresh().catch(error=>status(error.message,true));
+ window.addEventListener('studio-image-provider-changed',()=>{if(!busy)Promise.resolve(refresh()).catch(()=>{});});
 })();

@@ -1,0 +1,11 @@
+{
+  "footprint_cells": [3, 2],
+  "cell_px": 128,
+  "wall_height_units": 1.5,
+  "roof": {"type": "gable", "ridge_axis": "x", "rise_units": 1, "overhang_cells": 0.2},
+  "openings": [
+    {"type": "door", "facade": "+y", "center": 1.5, "width": 0.6, "bottom": 0, "height": 1.05},
+    {"type": "window", "facade": "+y", "center": 0.6, "width": 0.5, "bottom": 0.65, "height": 0.47},
+    {"type": "window", "facade": "+x", "center": 0.85, "width": 0.55, "bottom": 0.65, "height": 0.47}
+  ]
+}

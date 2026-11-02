@@ -1,4 +1,4 @@
-"""Studio image-provider adapter for the user's asynchronous compatible API.
+"""Shared image-provider adapter: compatible async API or Google Cloud Vertex AI.
 
 Remote task IDs are saved before polling, allowing continuation without paying
 for a second generation. Credentials stay in the worker environment.
@@ -27,7 +27,9 @@ def load_config(root=None):
     reflected on the next read. No shell interpolation is performed.
     """
     path = (Path(root) if root else Path(__file__).resolve().parent.parent)/'.env'
-    allowed = {'STUDIO_IMAGE_API_KEY', 'OPENAI_API_KEY', 'STUDIO_IMAGE_BASE_URL'}
+    allowed = {'STUDIO_IMAGE_API_KEY', 'OPENAI_API_KEY', 'STUDIO_IMAGE_BASE_URL',
+               'STUDIO_IMAGE_PROVIDER', 'STUDIO_GOOGLE_IMAGE_MODEL', 'GCP_PROJECT_ID',
+               'GOOGLE_CLOUD_PROJECT', 'GCP_LOCATION', 'GOOGLE_CLOUD_LOCATION', 'GOOGLE_APPLICATION_CREDENTIALS'}
     result={}
     for line in (path.read_text().splitlines() if path.is_file() else []):
         line = line.strip()
@@ -43,7 +45,18 @@ def load_config(root=None):
 
 
 def configured(root=None):
-    config=load_config(root)
+    return config_ready(load_config(root), root)
+
+
+def config_ready(config, root=None):
+    if config.get('STUDIO_IMAGE_PROVIDER', 'openai_compatible') == 'google_cloud':
+        try:
+            from google_images import settings
+            settings(config, Path(root) if root else Path(__file__).resolve().parent.parent)
+            import google.auth
+            return True
+        except (ValueError, ImportError): return False
+    if config.get('STUDIO_IMAGE_PROVIDER', 'openai_compatible') != 'openai_compatible': return False
     return bool(config.get('STUDIO_IMAGE_API_KEY') or config.get('OPENAI_API_KEY'))
 
 
@@ -80,10 +93,32 @@ class SubmissionRejected(ValueError):
     """A definite HTTP rejection before a remote task was accepted."""
 
 
+def provider_info(root=None):
+    config = load_config(root)
+    provider = config.get('STUDIO_IMAGE_PROVIDER', 'openai_compatible')
+    model = config.get('STUDIO_GOOGLE_IMAGE_MODEL', 'gemini-2.5-flash-image') if provider == 'google_cloud' else 'gpt-image-2'
+    return dict(image_provider=provider, image_model=model)
+
+
+def receipt_identity(provider):
+    model = getattr(provider, 'model', None)
+    kind = getattr(provider, 'provider', None)
+    return dict(model=model if isinstance(model,str) else 'gpt-image-2',
+                provider=kind if isinstance(kind,str) else 'openai_compatible', base_url=provider.base)
+
+
 class Provider:
     def __init__(self, audit_path=None):
         self.audit_path = Path(audit_path) if audit_path else None
         config=load_config()
+        kind=config.get('STUDIO_IMAGE_PROVIDER', 'openai_compatible')
+        if kind == 'google_cloud':
+            from google_images import GoogleProvider
+            self.google=GoogleProvider(config, Path(__file__).resolve().parent.parent, self.audit_path)
+            self.base,self.model,self.provider=self.google.base,self.google.model,self.google.provider
+            return
+        if kind != 'openai_compatible': raise ValueError('STUDIO_IMAGE_PROVIDER 须为openai_compatible或google_cloud')
+        self.model,self.provider='gpt-image-2','openai_compatible'
         self.base = config.get('STUDIO_IMAGE_BASE_URL', DEFAULT_BASE).rstrip('/')
         parsed = urlparse(self.base)
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
@@ -128,6 +163,7 @@ class Provider:
             pass
 
     def request(self, suffix, payload=None, kind='application/json', binary=False):
+        if hasattr(self, 'google'): return self.google.request(suffix,payload,kind,binary)
         url = self.base + suffix
         origin = urlparse(self.base).netloc
         for _ in range(5):
@@ -178,6 +214,7 @@ class Provider:
         raise ValueError('图片下载重定向次数过多')
 
     def create(self, prompt, images):
+        if hasattr(self, 'google'): return self.google.create(prompt,images)
         fields = {'model': 'gpt-image-2', 'prompt': prompt, 'size': '1024x1024',
                   'quality': 'high', 'response_format': 'b64_json', 'n': 1, 'async': True}
         if not images:
@@ -204,13 +241,12 @@ def generate_materials(folder, spec, progress):
             prompt_set['ground'] = spec['material_prompt']
     for role in (('ground',) if spec.get('asset_type')=='material' else ('ground','road')):
         target = folder/'inputs'/f'{role}.png'
-        record = receipt.setdefault(role, {'prompt': prompt_set[role], 'model': 'gpt-image-2',
-                                          'base_url': provider.base})
-        if record['base_url'] != provider.base:
-            raise ValueError('图片服务地址已变化，请恢复原地址后继续，或创建新任务')
+        record = receipt.setdefault(role, {'prompt': prompt_set[role], **receipt_identity(provider)})
         if target.is_file() and record.get('sha256') == digest(target):
             progress('复用已生成的' + ('地面' if role == 'ground' else '道路') + '材质')
             continue
+        if record['base_url'] != provider.base:
+            raise ValueError('图片服务或模型已变化，请恢复原配置继续，或创建新任务')
         if record.get('submission_uncertain'):
             raise ValueError('上次提交未收到任务 ID，服务端可能已扣费。请在服务商后台确认后新建任务，避免自动重复提交')
         if record.get('remote_status') == 'failed':

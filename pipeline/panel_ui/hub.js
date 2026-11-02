@@ -4,13 +4,14 @@
  const view=['library','create','tasks'].includes(params.get('view'))?params.get('view'):'library';
  let category=params.get('category')||'全部',assets=[],jobs=[],loading=false;
  const actionLabels={import_model:'导入模型',optimize:'模型优化',adopt_model:'采用模型',reconstruct:'生成模型',prepare:'准备贴图',rig:'骨骼绑定',download:'导入动画',review:'姿态检查',bake:'渲染图集',equipment:'装备调整',weapon:'武器制作',sequence:'动作编排',compact:'图集精简',palette:'颜色简化',produce:'整套动作生产'};
- const categories=['全部','人物','地表','物件','连接构件'];if(!categories.includes(category))category='全部';
+ const categories=['全部','人物','地表','物件','连接构件','建筑'];if(!categories.includes(category))category='全部';
  const titles={library:['素材库','查看已有素材，继续调整或导出。'],create:['制作素材','选择要制作的产物，再设置来源和规格。'],tasks:['生产任务','集中查看各类生产任务；进入工作台继续处理或查看日志。']};
  const node=(tag,value,cls)=>{const n=document.createElement(tag);if(value!==undefined)n.textContent=value;if(cls)n.className=cls;return n;};
  const link=(title,url)=>{const a=node('a',title);a.href=url;return a;};
  const url=(page,key,id)=>page+'?'+key+'='+encodeURIComponent(id);
  const water=k=>k.asset_type==='material'&&k.material_kind==='water';
  const creations=[
+  ['建筑','建筑素材','选择建筑线框模板或上传框线图，设定风格，生成并挑选候选，标定后保存。','/buildings.html','⌂'],
   ['人物','人物','从人物原画或已有 GLB 开始，制作模型、动作与游戏素材。','/characters.html?create=1','人'],
   ['地表','地面材质','制作草地、沙地、石质等可平铺地面。','/terrain.html?type=material','▧'],
   ['地表','道路套件','制作地面和四方向道路连接块。','/terrain.html?type=terrain','╋'],
@@ -33,13 +34,14 @@
  if(view==='tasks'){const status=$('hub-status').value;list=list.filter(i=>status==='all'||status==='active'&&i.active||status==='failed'&&i.failed||status==='done'&&i.done);}
  $('hub-count').textContent=list.length+(view==='tasks'?' 项任务':view==='create'?' 种产物':' 项素材');const root=$('hub-content');root.replaceChildren(...list.map(view==='tasks'?taskCard:card));if(!list.length)root.append(node('div',query?'没有匹配的结果，试试其他名称。':view==='tasks'?'此分类下暂无任务。':'此分类下暂无素材，可以从“制作素材”开始。','hub-empty'));}
  function addKits(kits,category,kind,page,prefix,image){for(const k of kits||[]){const target=typeof page==='function'?page(k):page;assets.push({id:k.id,title:k.title||k.id,category,kind:typeof kind==='function'?kind(k):kind,href:url(target,'kit',k.id),image:prefix+encodeURIComponent(k.id)+'/'+(k.projection_spec?.preview||image),invalid:k.integrity?.passed===false,next:water(k)?['制作水岸',url('/water-shore.html','water',k.id)]:null});}}
- function addJobs(items,category,page){for(const j of items||[]){const target=typeof page==='function'?page(j):page;const active=['queued','running'].includes(j.status),failed=['failed','interrupted'].includes(j.status),done=['complete','succeeded'].includes(j.status);jobs.push({id:j.id,title:j.spec?.title||j.title||actionLabels[j.action]||j.action||j.id,category,stage:j.stage,error:j.error,time:j.created_at,active,failed,done,statusTitle:active?'进行中':failed?'需要处理':done?'已完成':j.status,href:done&&category!=='人物'&&(j.kit_id||j.kit)?url(target,'kit',j.kit_id||j.kit):url(target,'task',j.id)+(category==='人物'&&j.character?'&character='+encodeURIComponent(j.character):'')});}}
- async function refresh(){if(loading)return;loading=true;$('hub-refresh').disabled=true;const endpoints=['/api/state','/api/terrain/state','/api/props/state','/api/components/state'];try{
+ function addJobs(items,category,page){for(const j of items||[]){const target=typeof page==='function'?page(j):page;const active=['queued','running'].includes(j.status),failed=['failed','interrupted'].includes(j.status),done=['complete','succeeded'].includes(j.status);jobs.push({id:j.id,title:j.spec?.title||j.title||actionLabels[j.action]||j.action||j.id,category,stage:j.stage,error:j.error,time:j.created_at,active,failed,done,statusTitle:active?'进行中':failed?'需要处理':done?'已完成':(j.workflow==='line_drawing'?({draft:'待生成',waiting_review:'待挑选'}[j.status]||j.status):({draft:'结构待确认',waiting_review:'待人工复核',approved:'待导出',rejected:'待修正'}[j.status]||j.status)),href:done&&category!=='人物'&&(j.kit_id||j.kit)?url(target,'kit',j.kit_id||j.kit):url(target,'task',j.id)+(category==='人物'&&j.character?'&character='+encodeURIComponent(j.character):'')});}}
+ async function refresh(){if(loading)return;loading=true;$('hub-refresh').disabled=true;const endpoints=['/api/state','/api/terrain/state','/api/props/state','/api/components/state','/api/buildings/state'];try{
  const responses=await Promise.allSettled(endpoints.map(async endpoint=>{const response=await fetch(endpoint);if(!response.ok)throw Error(endpoint+' 读取失败');return response.json();}));assets=[];jobs=[];const errors=[];
- responses.forEach((result,i)=>{if(result.status==='rejected'){errors.push(['人物','地表','物件','连接构件'][i]);return;}const s=result.value;
+ responses.forEach((result,i)=>{if(result.status==='rejected'){errors.push(['人物','地表','物件','连接构件','建筑'][i]);return;}const s=result.value;
  if(i===0){for(const c of s.characters||[])assets.push({id:c.id,title:c.display_name||c.id,category:'人物',kind:'人物工作区',href:url('/characters.html','character',c.id),symbol:'人',description:'模型、骨骼、动作与游戏素材'});addJobs(s.jobs,'人物','/characters.html');}
  if(i===1){addKits(s.kits,'地表',k=>water(k)?'水面':k.asset_type==='material'?'地面材质':'道路套件',k=>water(k)?'/water.html':'/terrain.html','/terrain-asset/','preview.png');addKits(s.transitions,'地表',k=>k.transition_mode==='shoreline'?'水岸':'地表过渡',k=>k.transition_mode==='shoreline'?'/water-shore.html':'/transition.html','/transition-asset/','preview.png');addJobs(s.jobs,'地表',j=>water(j.spec||{})?'/water.html':'/terrain.html');}
  if(i===2){addKits(s.kits,'物件',k=>s.kinds?.[k.asset_kind]?.label||'独立物件','/props.html','/prop-asset/','sprite.png');addJobs(s.jobs,'物件','/props.html');}
+ if(i===4){addKits(s.kits,'建筑',k=>k.workflow==='line_drawing'?'建筑素材':'建筑候选包','/buildings.html','/building-asset/','preview.png');addJobs(s.jobs,'建筑','/buildings.html');}
  if(i===3){addKits(s.kits,'连接构件','围栏','/components.html','/component-asset/','assembly.png');addJobs(s.jobs,'连接构件','/components.html');}
  });jobs.sort((a,b)=>Number(b.active)-Number(a.active)||String(b.time||'').localeCompare(String(a.time||'')));$('hub-message').textContent=errors.length?errors.join('、')+'读取失败，可刷新重试。':' ';$('hub-message').className=errors.length?'hub-error':'';paint();
  }catch(error){$('hub-message').textContent=error.message;}finally{loading=false;$('hub-refresh').disabled=false;}}
