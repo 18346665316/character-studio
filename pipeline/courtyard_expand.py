@@ -13,6 +13,21 @@ ORIGIN=(512,300)
 CASES=((1,1),(5,1),(1,5),(5,5),(9,7))
 
 
+def connection_ports(part,checks,source_sha):
+    """The exact source-coordinate interfaces used by automatic expansion."""
+    result=[];foot=part['foot']
+    for axis,own,side in [('a',part['a'],part['b']),('b',part['b'],part['a'])]:
+        if side==1:continue
+        r=checks['axes'][axis];c=r['selected'];cross=0 if side==0 else 384
+        start=float(np.interp(cross,r['cross'],c['path']))
+        ends=[('end',start)] if own==0 else [('start',start+c['length'])] if own==2 else [('start',start),('end',start+c['length'])]
+        for kind,t in ends:
+            u,v=(t,cross) if axis=='a' else (cross,t)
+            point=[ORIGIN[0]+u-v-foot[0],ORIGIN[1]+(u+v)/2-foot[1]]
+            result.append(dict(axis=axis,kind=kind,point=point,group=source_sha+':'+axis+':'+str(side)))
+    return result
+
+
 def runs(mask):
     indices=np.flatnonzero(mask)
     return [g for g in np.split(indices,np.flatnonzero(np.diff(indices)>1)+1) if len(g)>=16]

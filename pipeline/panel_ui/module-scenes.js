@@ -46,7 +46,7 @@ class StudioSceneRenderer {
  const sourceHref=m=>m.source?.family==='character'?'/characters.html?character='+m.character_id:['terrain','transition'].includes(m.source?.family)?(m.source.family==='transition'?'/transition.html?kit=':'/terrain.html?kit=')+m.source.id:'/props.html?kit='+m.source.id;
  const moduleTitle=m=>m.source?.family==='transition'?m.title+' · 角点 '+m.source.corners+' / 变化 '+(m.source.variant+1):m.title;
  const scale=m=>m.world_scale??1;
- const ports=m=>m?.corner_ports?Object.entries(m.corner_ports).map(([axis,point])=>({axis,point,kind:'end'})):m?.wall_connectors?['start','end'].map(kind=>({axis:m.wall_connectors.axis,point:m.wall_connectors[kind],kind})):[];
+ const ports=m=>m?.assembly_ports|| (m?.corner_ports?Object.entries(m.corner_ports).map(([axis,point])=>({axis,point,kind:'end'})):m?.wall_connectors?['start','end'].map(kind=>({axis:m.wall_connectors.axis,point:m.wall_connectors[kind],kind})):[]);
  const module=()=>scene?.modules.find(m=>m.id===selectedModule);
  const instance=()=>scene?.instances.find(v=>v.id===selectedInstance);
  const status=(message,error=false)=>{
@@ -140,7 +140,7 @@ class StudioSceneRenderer {
   if(hover&&activeTool==='place'&&module()){
    const m=module(),p=placementPoint(m.id,hover);ctx.globalAlpha=.5;ctx.drawImage(images.get(m.image),p[0]-m.anchor[0]*scale(m),p[1]-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));ctx.globalAlpha=1;
   }
-  if(activeTool==='place'&&ports(module()).length){for(const v of scene.instances){const m=scene.modules.find(m=>m.id===v.module);for(const port of ports(m)){if(!ports(module()).some(p=>p.axis===port.axis&&p.kind!==port.kind))continue;const p=port.point.map((n,i)=>n*scale(m)+v.position[i]);ctx.beginPath();ctx.arc(...p,4/zoom,0,Math.PI*2);ctx.fillStyle='#81e9c0';ctx.fill();}}}
+  if(activeTool==='place'&&ports(module()).length){for(const v of scene.instances){const m=scene.modules.find(m=>m.id===v.module);for(const port of ports(m)){if(!ports(module()).some(p=>p.axis===port.axis&&p.kind!==port.kind&&p.group===port.group))continue;const p=port.point.map((n,i)=>n*scale(m)+v.position[i]);ctx.beginPath();ctx.arc(...p,4/zoom,0,Math.PI*2);ctx.fillStyle='#81e9c0';ctx.fill();}}}
   ctx.beginPath();ctx.arc(...scene.spawn,8,0,Math.PI*2);ctx.fillStyle='#ffe194';ctx.fill();ctx.restore();
   $('layout-summary').textContent=`${scene.modules.length} 个模块 · ${scene.instances.length} 个实例${dirty?' · 未保存':' · 已保存'}`;
   $('zoom-label').textContent=Math.round(zoom*100)+'%';$('undo').disabled=!undoStack.length;$('redo').disabled=!redoStack.length;
@@ -170,7 +170,7 @@ class StudioSceneRenderer {
    const other=scene.modules.find(m=>m.id===v.module),target=ports(other);
    if(scale(current)!==scale(other))continue;
    for(const from of connectors)for(const to of target){
-    if(from.axis!==to.axis||from.kind===to.kind)continue;
+    if(from.axis!==to.axis||from.kind===to.kind||from.group!==to.group)continue;
     const proposed=to.point.map((n,i)=>v.position[i]+n*scale(other)-from.point[i]*scale(current));
     const distance=Math.hypot(...proposed.map((n,i)=>n-p[i]));
     if(distance<minimum){minimum=distance;best=proposed;}
@@ -183,7 +183,13 @@ class StudioSceneRenderer {
   return x>=0&&y>=0&&x<data.width&&y<data.height&&data.data[(y*data.width+x)*4+3]>20;
  });}
  function place(id,p){requireSavedModule();checkpoint();const v={id:crypto.randomUUID(),module:id,position:placementPoint(id,p)};scene.instances.push(v);selectedInstance=v.id;changed();}
- function duplicate(){const v=instance();if(!v)return;checkpoint();const copy={...structuredClone(v),id:crypto.randomUUID(),position:[v.position[0]+128,v.position[1]]};scene.instances.push(copy);selectedInstance=copy.id;changed();}
+ function duplicate(){
+  const v=instance();if(!v)return;checkpoint();const m=scene.modules.find(m=>m.id===v.module),ps=ports(m);
+  const start=ps.find(p=>p.kind==='start'&&ps.some(q=>q.kind==='end'&&q.axis===p.axis&&q.group===p.group));
+  const end=start&&ps.find(p=>p.kind==='end'&&p.axis===start.axis&&p.group===start.group);
+  const offset=end?end.point.map((n,i)=>(n-start.point[i])*scale(m)):[128,0];
+  const copy={...structuredClone(v),id:crypto.randomUUID(),position:v.position.map((n,i)=>n+offset[i])};scene.instances.push(copy);selectedInstance=copy.id;changed();
+ }
  function remove(){if(!instance())return;checkpoint();scene.instances=scene.instances.filter(v=>v.id!==selectedInstance);selectedInstance=null;changed();}
  async function saveLayout(){
   if(!scene)return;if(saving)throw Error('正在保存，请稍候。');saving=true;

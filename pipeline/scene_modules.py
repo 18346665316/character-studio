@@ -31,7 +31,8 @@ def load(root, identity):
             source=module['source'];key=(source['family'],source['id'],source.get('sha256'))
             if key not in packages:packages[key]=source_package(root,source)
             raw,manifest=packages[key]
-            config=source_config(manifest,module['source'])
+            config=source_config(manifest,module['source'],root)
+            if 'assembly_ports' in config:module.setdefault('assembly_ports',config['assembly_ports'])
             if any(module.get(k)!=v for k,v in config.items()):raise ValueError('场景素材设置与引用版本不一致')
             with zipfile.ZipFile(BytesIO(raw)) as archive: digest=sha256(archive.read(source_image(manifest,module['source']))).hexdigest()
             if module['image']!=digest+'.png':raise ValueError('场景图片与素材版本不一致')
@@ -62,7 +63,7 @@ def source_image(manifest,source):
     return 'sprite.png'
 
 
-def source_config(manifest,source):
+def source_config(manifest,source,root=None):
     if source['family'] in ('terrain','transition'):
         variant=transition_tile(manifest,source) if source['family']=='transition' else manifest['projection_spec']['variants'][0]
         return dict(title=manifest['title'],anchor=variant['anchor_px'],
@@ -73,7 +74,12 @@ def source_config(manifest,source):
                 'character_scene':'characters/'+manifest['id']+'/'+manifest['entry_scene'],
                 'character_id':manifest['character']}
     from static_props import module_settings
-    return dict(module_settings(manifest),layer='objects',
+    extra={}
+    if root is not None and manifest.get('courtyard_part'):
+        from courtyard_expand import connection_ports
+        checks=read(Path(root)/'prop-kits'/manifest['id']/'expansion-checks.json')
+        extra['assembly_ports']=connection_ports(manifest['courtyard_part'],checks,manifest['provenance']['source_sha256'])
+    return dict(module_settings(manifest),layer='objects',**extra,
                 **({'wall_connectors':manifest['wall_connectors']} if manifest.get('wall_connectors') else {}),
                 **({'corner_ports':manifest['corner_ports']} if manifest.get('corner_ports') else {}))
 
@@ -118,7 +124,7 @@ def pin(root, scene, manifest, module_id=None, family='prop',selectors=None):
     digest=sha256(image).hexdigest();images=directory(root)/'images';images.mkdir(exist_ok=True)
     (images/(digest+'.png')).write_bytes(image)
     module=dict(id=module_id or secrets.token_hex(8),source=source,image=digest+'.png',
-                canvas_px=list(Image.open(BytesIO(image)).size),version=(old['version']+1 if old else 1),**source_config(verified,source))
+                canvas_px=list(Image.open(BytesIO(image)).size),version=(old['version']+1 if old else 1),**source_config(verified,source,root))
     if old:scene['modules'][scene['modules'].index(old)]=module
     else:scene['modules'].append(module)
     return module
