@@ -822,6 +822,17 @@ def handler(panel):
                             result=panel.start_building(dict(task=result['id'],revision=result['revision']))
                         else:
                             result=panel.start_terrain(plan['data'],props=route=='/api/props/generate',components=route=='/api/components/generate')
+                    elif route == '/api/projects/courtyard-access':
+                        from studio_projects import load,revision,item,current_assets
+                        from courtyard_access import build
+                        project=load(panel.root,data.get('project'));revision(project,data)
+                        entry=item(project,data.get('item'))
+                        asset=current_assets(panel.root,project).get(entry['id'])
+                        if not entry.get('courtyard_ring_build') or not asset:raise ValueError('请先制作可扩建院墙套件')
+                        folder=next((p.parent for p in (panel.root/'.local/props/jobs').glob('*/job.json')
+                            if (read(p,{}) or {}).get('kit_id')==asset['id'] and (p.parent/'expansion-published.json').is_file()),None)
+                        if folder is None:raise ValueError('当前素材没有已完成的扩建来源')
+                        result=build(panel.root,folder)
                     elif route == '/api/image-provider':
                         from image_provider_settings import switch
                         result=switch(panel.root,data)

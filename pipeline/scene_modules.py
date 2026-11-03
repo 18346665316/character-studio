@@ -75,6 +75,8 @@ def source_config(manifest,source,root=None):
                 'character_id':manifest['character']}
     from static_props import module_settings
     extra={}
+    for key in ('assembly_ports','occlusion_slices'):
+        if manifest.get(key):extra[key]=manifest[key]
     if root is not None and manifest.get('courtyard_part'):
         from courtyard_expand import connection_ports
         checks=read(Path(root)/'prop-kits'/manifest['id']/'expansion-checks.json')
@@ -253,5 +255,5 @@ def export(root, identity):
         templates=Path(__file__).parent/'module_scene_runtime'
         for filename in ('project.godot','main.tscn','scene.gd'):
             z.writestr(filename,(templates/filename).read_bytes())
-        z.writestr('README.txt','Studio 模块场景 MVP。Godot 4 打开 project.godot；WASD移动，C显示碰撞。\n图片为引用素材版本的原始PNG；坐标为屏幕像素、Y向下，锚点为图像像素，碰撞点相对锚点。\n仅平移、脚底Y排序；无旋转、缩放、导航、多层高度或复杂长墙遮挡。\n素材编辑另存库版本并更新当前场景引用；其他场景保持原引用。交付包含引用素材原包与布局。\n')
+        z.writestr('README.txt','Studio 模块场景 MVP。Godot 4 打开 project.godot；WASD移动，C显示碰撞。\n图片为引用素材版本的原始PNG；坐标为屏幕像素、Y向下，锚点为图像像素，碰撞点相对锚点。\n普通素材脚底Y排序；带occlusion_slices的墙体按局部墙脚分段排序。测试角色半径8px，无导航或多层高度。\n素材编辑另存库版本并更新当前场景引用；其他场景保持原引用。交付包含引用素材原包与布局。\n')
     return output.getvalue()

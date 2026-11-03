@@ -51,6 +51,7 @@
   wallOrigins.ai_corner_wall_slice='来源：AI一体生成转角长墙，Studio从同一原图切出转角及两轴直墙。';
   wallOrigins.ai_courtyard_ring='来源：AI一体生成闭合院墙，Studio检查闭合并切分四角四边；固定尺寸组合。';
   wallOrigins.ai_courtyard_expansion='来源：AI院墙原图，Studio寻找相对墙共同重复切口；同一套四角与直墙用于不同尺寸院落。';
+  wallOrigins.program_wall_passage='来源：程序重复同源墙段并切出开放门洞，保留原瓦顶；未生成门框或门扇。';
   if(wallOrigins[kit.provenance.art_source])$('prop-origin').textContent=wallOrigins[kit.provenance.art_source];
   $('prop-origin').textContent+=' 投影：'+(kit.view==='isometric_2_1'?'等距2:1（角度待人工验收，锚点为占地中心建议）':'斜俯视')+'。';
   $('prop-preview').src=base+(kit.processing?.method==='automatic_wall_repeat'?'repeat-preview.png':'preview.png');$('prop-overlay').src=base+'anchor_collision.png';

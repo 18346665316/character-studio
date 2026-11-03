@@ -27,14 +27,31 @@ func _ready():
 			actor.scale=Vector2.ONE*world_scale
 			origin.add_child(actor)
 		else:
-			var art := Sprite2D.new()
-			art.texture = load("res://images/" + module.image)
-			art.centered = false
-			art.position = -Vector2(module.anchor[0], module.anchor[1]) * world_scale
-			art.scale = Vector2.ONE * world_scale
-			origin.add_child(art)
+			if module.has("occlusion_slices"):
+				# Each narrow strip sorts against the player's feet at its local wall baseline.
+				for strip in module.occlusion_slices:
+					var strip_origin := Node2D.new()
+					strip_origin.position = origin.position + Vector2(0,float(strip.foot_y)*world_scale)
+					world.add_child(strip_origin)
+					var art := Sprite2D.new()
+					art.texture = load("res://images/" + module.image)
+					art.centered = false
+					art.region_enabled = true
+					art.region_rect = Rect2(float(strip.x),0,float(strip.width),float(module.canvas_px[1]))
+					art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+					art.position = Vector2(float(strip.x)-float(module.anchor[0]),-float(module.anchor[1])-float(strip.foot_y))*world_scale
+					art.scale = Vector2.ONE*world_scale
+					strip_origin.add_child(art)
+			else:
+				var art := Sprite2D.new()
+				art.texture = load("res://images/" + module.image)
+				art.centered = false
+				art.position = -Vector2(module.anchor[0], module.anchor[1]) * world_scale
+				art.scale = Vector2.ONE * world_scale
+				origin.add_child(art)
 		for poly in module.polygons:
 			var body := StaticBody2D.new()
+			body.set_meta("module_title",module.title)
 			body.collision_layer = 1
 			body.collision_mask = 2
 			var shape := CollisionPolygon2D.new()
@@ -67,7 +84,7 @@ func _ready():
 	add_child(ui)
 	var label := Label.new()
 	label.position = Vector2(20,20)
-	label.text = "Studio 模块场景验收 · WASD / 方向键移动 · C 碰撞范围\n测试角色半径 8px · 脚底排序 · 无复杂分层遮挡"
+	label.text = "Studio 模块场景验收 · WASD / 方向键移动 · C 碰撞范围\n测试角色半径 8px · 支持墙体局部墙脚排序"
 	ui.add_child(label)
 func _physics_process(_delta):
 	var direction := Vector2(float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)), float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN))-float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)))
