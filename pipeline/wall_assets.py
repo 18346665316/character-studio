@@ -102,6 +102,40 @@ def process(original,axis):
     return sprite,report
 
 
+def cap_texture(sprite,bbox):
+    """Rectify the sloping roof band before mapping it onto either wall axis."""
+    rgb=np.asarray(sprite.convert('RGB'));alpha=np.asarray(sprite.getchannel('A'))
+    neutral=(rgb.max(axis=2)-rgb.min(axis=2)<65)&(rgb.mean(axis=2)<175)&(alpha>240)
+    x0,y0,x1,y1=bbox;w,h=x1-x0,y1-y0
+    samples=[]
+    for x in range(round(x0+.15*w),round(x0+.80*w)):
+        rows=np.flatnonzero(neutral[:,x])
+        if not len(rows):continue
+        top=rows[0];band=rows[rows<=top+max(8,round(.17*h))]
+        if len(band)>3:samples.append((x,top,band[-1]))
+    if len(samples)<20:raise ValueError('瓦顶区域不足，无法保留瓦片结构')
+    points=np.asarray(samples)
+    upper=np.polyfit(points[:,0],points[:,1],1);lower=np.polyfit(points[:,0],points[:,2],1)
+    xx=np.linspace(points[0,0],points[-1,0],256)[None,:]
+    top=np.polyval(upper,xx)+2;bottom=np.polyval(lower,xx)-2
+    if np.any(bottom-top<2):raise ValueError('瓦顶区域过薄，不能提取材质')
+    # Leave out the fascia/plaster border below the tiles. Surface UV runs
+    # from the eave toward the ridge, opposite to image Y.
+    v=np.linspace(.80,.02,256)[:,None]
+    # The roof cross-section also shifts horizontally in 2:1 projection.
+    # Undo that shear so individual tiles retain their shape across the slope.
+    shift=np.sign(upper[0])*.5*(bottom-top)*(1-v)
+    yy=top+upper[0]*shift+(bottom-top)*v
+    sample_x=xx+shift
+    texture=rgb[np.clip(np.rint(yy).astype(int),0,sprite.height-1),np.clip(np.rint(sample_x).astype(int),0,sprite.width-1)].copy()
+    # Only the longitudinal direction repeats; ridge and eave stay distinct.
+    edge=(texture[:,0].astype(float)+texture[:,-1].astype(float))/2
+    for i in range(12):
+        weight=i/12
+        for column in (i,255-i):texture[:,column]=np.rint(edge*(1-weight)+texture[:,column]*weight).astype(np.uint8)
+    return Image.fromarray(texture)
+
+
 def material_textures(original):
     """Sample appearance only. Provider silhouette is never used as geometry."""
     from static_props import cutout
@@ -111,13 +145,13 @@ def material_textures(original):
     if not bbox:raise ValueError('原图没有可提取的墙体材质')
     x0,y0,x1,y1=bbox;w,h=x1-x0,y1-y0
     result={}
-    # Conservative interior swatches of the visible plaster and cap. Missing
-    # pixels use the swatch median, never background color. Both axes share them.
-    for role,rect in [('plaster',(.28,.49,.60,.69)),('cap',(.10,.08,.58,.25))]:
+    result['cap']=cap_texture(sprite,bbox)
+    # Conservative interior plaster swatch. Missing pixels use the median,
+    # never background color. Both axes share the same textures.
+    for role,rect in [('plaster',(.28,.49,.60,.69))]:
         box=(round(x0+rect[0]*w),round(y0+rect[1]*h),round(x0+rect[2]*w),round(y0+rect[3]*h))
         patch=sprite.crop(box);rgb=np.array(patch.convert('RGB'));valid=np.array(patch.getchannel('A'))>240
-        if role=='cap':valid&=(rgb.max(axis=2)-rgb.min(axis=2)<65)&(rgb.mean(axis=2)<175)
-        else:valid&=(rgb.mean(axis=2)>100)
+        valid&=(rgb.mean(axis=2)>100)
         if valid.sum()<20:raise ValueError('缺少可用的'+role+'材质采样，不能编译院墙')
         median=np.median(rgb[valid],axis=0).astype(np.uint8);rgb[~valid]=median
         texture=Image.fromarray(rgb).resize((128,128),Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(.6))
@@ -148,6 +182,9 @@ def compile_surfaces(textures,axis):
         yy,xx=np.indices((CANVAS[1],CANVAS[0]),dtype=float);dx=(xx-p0[0]).ravel();dy=(yy-p0[1]).ravel()
         uv=np.stack([inv[0,0]*dx+inv[0,1]*dy,inv[1,0]*dx+inv[1,1]*dy])
         texture=np.asarray(textures['plaster' if index==0 else 'cap'])
+        if index==1:
+            # A thin fascia cannot carry the whole roof pattern a second time.
+            texture=np.broadcast_to(texture[:24].mean(axis=0).astype(np.uint8)[None,:,:],texture.shape)
         tx=np.clip(np.rint(uv[0]*255).astype(int),0,255);ty=np.clip(np.rint(uv[1]*255).astype(int),0,255)
         layer=Image.fromarray(texture[ty,tx].reshape((512,512,3)))
         coverage=Image.new('L',CANVAS);ImageDraw.Draw(coverage).polygon(vertices,fill=255)

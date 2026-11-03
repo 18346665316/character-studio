@@ -90,10 +90,24 @@ class WallAssets(unittest.TestCase):
             sprite=walls.compile_surfaces(textures,axis)
             self.assertTrue(np.array_equal(np.asarray(sprite.getchannel('A'))>0,np.asarray(walls.mask(axis))>0))
             self.assertEqual(sprite.size,(512,512))
-        for texture in textures.values():
+        for role,texture in textures.items():
             pixels=np.asarray(texture)
             self.assertTrue(np.array_equal(pixels[:,0],pixels[:,-1]))
-            self.assertTrue(np.array_equal(pixels[0],pixels[-1]))
+            if role=='plaster':self.assertTrue(np.array_equal(pixels[0],pixels[-1]))
+
+    def test_roof_sampling_straightens_tiles_instead_of_sampling_a_diagonal_crop(self):
+        import numpy as np
+        from PIL import ImageDraw
+        from build_courtyard_wall_templates import point,project,ANCHOR
+        image=fixture('a');draw=ImageDraw.Draw(image)
+        draw.bitmap((0,0),walls.mask('a'),fill=(230,220,200))
+        for t in range(0,128,16):
+            vertices=[point('a',t,8,100),point('a',t+16,8,100),point('a',t+16,0,108),point('a',t,0,108)]
+            color=80 if t%32==0 else 145
+            draw.polygon([(project(p)[0]+ANCHOR[0],project(p)[1]+ANCHOR[1]) for p in vertices],fill=(color,color,color))
+        texture=np.asarray(walls.material_textures(image)['cap']).astype(float)
+        self.assertLess(np.abs(texture[20]-texture[-20]).mean(),15)
+        self.assertGreater(texture[128,:,0].std(),15)
 
     def test_project_template_binding_is_explicit_and_used_by_production(self):
         p=projects.change(self.root,dict(action='create',title='院墙',baseline=dict(style='hand painted')))
