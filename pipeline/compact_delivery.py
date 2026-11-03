@@ -52,6 +52,12 @@ def run(root,character,pinned):
             timing.setdefault('fps',timing['frame_count']/timing['duration_seconds'])
             game=studio.make_game_version(staging/filename,timing,quality,(data.get('equipment') or {}).get('usage'),profile=pinned.get('profile','balanced'))
             result[filename]={**original,'quality':quality,'game':game}
+            if original.get('color_comparison'):
+                from current_delivery import original as raw_source
+                from palette_delivery import write_selection
+                raw=raw_source(root,character,pinned['delivery'])
+                raw_timing=json.loads((raw/'manifest.json').read_text())[filename]
+                result[filename]['color_comparison']=write_selection(raw/filename,staging/'comparison',raw_timing,game,quality)
             atomic(staging/(clip+'_render.json'),timing)
             studio.make_preview(staging/filename,staging/(clip+'_preview.gif'),timing['duration_seconds'],timing['frame_width'],timing['frame_count'])
             results.append({'name':clip,**quality,'frame_count':timing['frame_count'],'game_frame_count':game['frame_count'],'duration_seconds':timing['duration_seconds'],'fps':timing['fps'],'source_fps':timing.get('source_fps')})
@@ -72,7 +78,7 @@ def run(root,character,pinned):
         raise ValueError('全部动作精简失败：'+'；'.join(r['reason'] for r in results))
     atomic(staging/'manifest.json',result)
     # Preserve equipment snapshots carried by the original delivery.
-    for filename in ('equipment.json','equipment_usage.json'):
+    for filename in ('equipment.json','equipment_usage.json','palette.json','projection.json'):
         if (directory/filename).is_file():
             source=AssetRepository(root).scoped(str((directory/filename).relative_to(root)),f'deliverables/{character}/{pinned["delivery"]}')
             shutil.copy2(source,staging/filename)

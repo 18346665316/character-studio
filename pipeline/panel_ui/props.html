@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · 独立物件</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/terrain.css"><script src="/asset-workspace.js" defer></script><script src="/props.js" defer></script><link rel="stylesheet" href="/studio.css"><script src="/navigation.js" defer></script></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio · 独立物件</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/terrain.css"><script src="/asset-workspace.js" defer></script><link rel="stylesheet" href="/module-scenes.css"><script src="/sprite-editor.js" defer></script><script src="/props.js" defer></script><link rel="stylesheet" href="/studio.css"><script src="/navigation.js" defer></script></head>
 <body>
 <nav id="studio-navigation" aria-label="主导航"></nav>
 <header class="terrain-header"><div><span class="eyebrow">GAME ASSET STUDIO / STATIC PROPS</span><h1>独立物件</h1><p>生成完整物件，交付透明图片、落地锚点和可选碰撞建议。</p></div><span>单物件候选 · 待美术验收</span></header>
@@ -22,7 +22,7 @@
 <div id="prop-result" hidden>
 <div class="terrain-card"><h2>透明边缘验收</h2><p id="prop-origin" class="terrain-hint"></p><img id="prop-preview" class="surface-preview" alt="棋盘格、深色与绿色固定背景上的物件"><p class="terrain-hint">检查白边、品红残色、裁断及碎屑。三种底色仅用于验收，不随透明精灵导出。</p><button id="prop-cleanup" type="button" hidden>重新处理透明背景（不生图）</button><p id="prop-cleanup-info" class="terrain-hint"></p><a id="prop-sprite" download>查看透明PNG</a></div>
 <div class="terrain-card"><h2>落地锚点与碰撞建议</h2><img id="prop-overlay" alt="锚点和建议碰撞范围"><p class="terrain-hint">青色十字：落地锚点（等距为占地中心建议）；橙色：默认关闭的碰撞建议。图像坐标X向右、Y向下；碰撞点相对锚点。</p>
-<form id="prop-adjust"><label for="prop-result-usage">碰撞建议用途（均默认关闭）</label><select id="prop-result-usage"><option value="blocking">阻挡候选</option><option value="optional">可选占地建议</option><option value="none">不提供碰撞形状</option></select><div class="terrain-fields"><label>锚点X<input id="prop-anchor-x" type="number" step="0.01" required></label><label>锚点Y<input id="prop-anchor-y" type="number" step="0.01" required></label><label>碰撞宽度<input id="prop-width" type="number" step="0.01" required></label><label>碰撞深度<input id="prop-depth" type="number" step="0.01" required></label></div><button id="prop-remake" type="submit">另存调整版本（不调用AI）</button></form>
+<p>锚点和多区域碰撞使用统一素材设置；另存新版本，不重新生图或修改原始精灵。</p><button id="prop-edit-settings">编辑锚点与碰撞…</button>
 <p id="prop-integrity" class="terrain-hint"></p><a id="prop-download" class="delivery-export" download>下载素材包 ZIP</a><p class="terrain-hint">包含透明图片、原图、提示词、参考图（如有）、来源记录、锚点、可选碰撞与接入说明。物理与实际角色遮挡尚未验收。</p></div></div>
 <div class="terrain-card"><h2>生产任务</h2><div id="prop-jobs"></div></div>
 </section></main></body></html>

@@ -7,7 +7,7 @@ from PIL import Image
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from terrain import material_variants
-from terrain_transition import mask,validate_edges,example_vertices,render,shoreline_tile,pond_vertices
+from terrain_transition import mask,validate_edges,example_vertices,render,shoreline_tile,pond_vertices,water_collision
 
 
 class TransitionTests(unittest.TestCase):
@@ -56,6 +56,19 @@ class TransitionTests(unittest.TestCase):
                 np.testing.assert_array_equal(np.array(tiles[v][0]),np.array(land[v]))
                 np.testing.assert_array_equal(np.array(tiles[v][15]),np.array(water[v]))
             self.assertEqual(render(tiles,pond_vertices(),size).size,(16*size,10*size))
+
+    def test_water_collision_matches_material_corners_and_shared_edges(self):
+        from sprite_contract import polygons
+        self.assertEqual(water_collision(0,128),[])
+        for bits in range(1,16):
+            poly=water_collision(bits,128)
+            self.assertGreaterEqual(len(poly),3)
+            # Same validation contract as user-authored scene collision.
+            polygons([poly])
+            for bit,corner in [(1,[0,-32]),(2,[64,0]),(4,[0,32]),(8,[-64,0])]:
+                self.assertEqual(corner in poly,bool(bits&bit))
+        self.assertEqual(len(water_collision(5,128)),6)
+        self.assertEqual(len(water_collision(10,128)),6)
 
     def test_shoreline_changes_the_boundary_but_preserves_water_and_land_endpoints(self):
         base=Image.new('RGB',(64,64),(90,130,60))

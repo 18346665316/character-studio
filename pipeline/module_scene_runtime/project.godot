@@ -1,0 +1,9 @@
+config_version=5
+[application]
+config/name="Studio 模块场景验收"
+run/main_scene="res://main.tscn"
+[display]
+window/size/viewport_width=1100
+window/size/viewport_height=760
+[rendering]
+renderer/rendering_method="gl_compatibility"

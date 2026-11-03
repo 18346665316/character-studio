@@ -34,7 +34,7 @@
   const another=create('a','制作新围栏 →');another.href='/components.html';delivery.append(another);
   // Collision suggestions are a preview; no current-fence editing is offered.
  }else if(family==='prop'){
-  if(panels.adjust){panels.adjust.append(original[1]);aside.hidden=true;original[1].querySelector('h2').after(create('p','点击或拖动青色锚点，数值用于精调。另存后生成新版本，不重新生图。','terrain-hint'));}
+  if(panels.adjust){panels.adjust.append(original[1]);aside.hidden=true;original[1].querySelector('h2').after(create('p','场景与素材工作台共用同一锚点、碰撞编辑器和素材版本。','terrain-hint')); }
   else original[1].hidden=true;
  }else if(panels.adjust){
   panels.adjust.append(aside);aside.classList.add('asset-adjust-form');
@@ -46,12 +46,12 @@
  const draftForm=detail?$(family==='prop'?'prop-adjust':family==='terrain'?'kit-form':'transition-form'):null;
  const draftNote=create('p',null,'asset-draft-note');draftNote.setAttribute('role','status');draftNote.hidden=true;if(panels.adjust)panels.adjust.prepend(draftNote);
  for(const id of ['base-kit','overlay-kit'])$(id)?.addEventListener('change',()=>{if($('asset-source-warning')&&$('base-kit').value&&$('overlay-kit').value)$('asset-source-warning').hidden=true;});
- let activeId=null,restoring=false,currentKit=null,baseValues=null,propImage=null,dragging=false;
+ let activeId=null,restoring=false,currentKit=null,baseValues=null;
  const key=id=>'studio-asset-draft:'+location.pathname+':'+id;
  const fields=()=>draftForm?[...draftForm.querySelectorAll('input[id],select[id],textarea[id]')].filter(n=>!['file','submit','button'].includes(n.type)):[];
  const values=()=>Object.fromEntries(fields().map(n=>[n.id,n.type==='checkbox'?n.checked:n.value]));
  const storage={get(id){try{return JSON.parse(sessionStorage.getItem(key(id))||'null');}catch{return null;}},set(id,v){try{sessionStorage.setItem(key(id),JSON.stringify(v));return true;}catch{return false;}},remove(id){try{sessionStorage.removeItem(key(id));}catch{}}};
- function dirty(){if(!activeId||restoring||!draftForm)return;const v=values(),changed=JSON.stringify(v)!==JSON.stringify(baseValues);const stored=changed&&storage.set(activeId,v);if(!changed)storage.remove(activeId);draftNote.hidden=!changed;draftNote.textContent=stored?'有未保存修改 · 草稿已暂存在当前浏览器，另存后生效。':'有未保存修改 · 另存后生效。';drawProp();}
+ function dirty(){if(!activeId||restoring||!draftForm)return;const v=values(),changed=JSON.stringify(v)!==JSON.stringify(baseValues);const stored=changed&&storage.set(activeId,v);if(!changed)storage.remove(activeId);draftNote.hidden=!changed;draftNote.textContent=stored?'有未保存修改 · 草稿已暂存在当前浏览器，另存后生效。':'有未保存修改 · 另存后生效。';}
  draftForm?.addEventListener('input',dirty);draftForm?.addEventListener('change',dirty);
  function status(message,error=false){feedback.textContent=message;feedback.className='asset-feedback'+(error?' terrain-error':'');feedback.hidden=!message;}
  function select(keyName,updateURL=false){
@@ -74,22 +74,6 @@
  }
  function jobsLoaded(items){if(task&&!items.some(j=>j.id===query.get('task')))status('此任务不在当前可用记录中，请回任务中心查看。',true);}
  window.StudioAssets={status,versions,historyOptions,openKit,trackJob,saved,select,jobRow,jobsLoaded};
- // A live overlay uses the same anchor-local geometry as the exported suggestion.
- const canvas=family==='prop'?create('canvas'):null;
- if(canvas&&panels.adjust){canvas.id='prop-live-overlay';canvas.setAttribute('aria-label','点击或拖动锚点，实时查看建议占地');canvas.tabIndex=0;$('prop-overlay').before(canvas);$('prop-overlay').hidden=true;}
- function drawProp(){
-  if(!canvas||!panels.adjust||!currentKit||!propImage?.complete||!propImage.naturalWidth)return;
-  const ctx=canvas.getContext('2d'),[w,h]=currentKit.canvas_px;canvas.width=w;canvas.height=h;ctx.imageSmoothingEnabled=false;ctx.fillStyle='#34404b';ctx.fillRect(0,0,w,h);ctx.drawImage(propImage,0,0);
-  const x=Number($('prop-anchor-x').value),y=Number($('prop-anchor-y').value),width=Number($('prop-width').value),depth=Number($('prop-depth').value),iso=currentKit.view==='isometric_2_1';
-  if(![x,y,width,depth].every(Number.isFinite))return;
-  if($('prop-result-usage').value!=='none'){
-   ctx.beginPath();if(iso&&currentKit.asset_kind==='crate'){ctx.moveTo(x,y-depth/2);ctx.lineTo(x+width/2,y);ctx.lineTo(x,y+depth/2);ctx.lineTo(x-width/2,y);ctx.closePath();}else{for(let i=0;i<=16;i++){const angle=i*Math.PI/8,px=x+Math.cos(angle)*width/2,py=y+(iso?0:-depth/2)+Math.sin(angle)*depth/2;i?ctx.lineTo(px,py):ctx.moveTo(px,py);}}
-   ctx.fillStyle='#ff913d33';ctx.fill();ctx.strokeStyle='#ff913d';ctx.lineWidth=1.5;ctx.stroke();
-  }
-  ctx.strokeStyle='#2de0e2';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x-6,y);ctx.lineTo(x+6,y);ctx.moveTo(x,y-6);ctx.lineTo(x,y+6);ctx.stroke();
- }
- function setAnchor(event){if(!currentKit)return;const rect=canvas.getBoundingClientRect();for(const [id,v,max]of [['prop-anchor-x',(event.clientX-rect.left)*canvas.width/rect.width,canvas.width-1],['prop-anchor-y',(event.clientY-rect.top)*canvas.height/rect.height,canvas.height-1]])$(id).value=String(Math.round(Math.max(0,Math.min(max,v))*100)/100);dirty();}
- if(canvas){canvas.onpointerdown=e=>{if(e.button!==0)return;dragging=true;canvas.setPointerCapture(e.pointerId);setAnchor(e);};canvas.onpointermove=e=>{if(dragging)setAnchor(e);};canvas.onpointerup=canvas.onpointercancel=()=>dragging=false;canvas.onkeydown=e=>{const d={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];if(!d)return;e.preventDefault();for(const [i,id]of ['prop-anchor-x','prop-anchor-y'].entries())$(id).value=String(Math.max(0,Math.min(Number($(id).max),Number($(id).value)+d[i]*(e.shiftKey?10:1))));dirty();};}
  document.addEventListener('studio:asset',event=>{
   const k=event.detail;if(!k?.id)return;
   tabs.hidden=false;currentKit=k;exportInfo.textContent='当前成果：'+(k.title||k.id);
@@ -114,7 +98,6 @@
   baseValues=values();const draft=storage.get(activeId);if(draft)for(const n of fields())if(Object.hasOwn(draft,n.id)){if(n.type==='checkbox')n.checked=!!draft[n.id];else if(n.tagName!=='SELECT'||[...n.options].some(o=>o.value===draft[n.id]))n.value=draft[n.id];}
   if(draft)for(const id of ['asset-type','base-kit','prop-result-usage'])$(id)?.dispatchEvent(new Event('change'));
   restoring=false;dirty();
-  if(canvas&&panels.adjust){propImage=new Image();propImage.onload=drawProp;propImage.onerror=()=>status('物件预览加载失败，请刷新重试。',true);propImage.src='/prop-asset/'+encodeURIComponent(k.id)+'/sprite.png';}
   if(detail){const url=new URL(location.href);url.searchParams.set('kit',k.id);history.replaceState(null,'',url);}
  });
  tabs.onkeydown=event=>{const keys=Object.keys(labels),i=keys.findIndex(k=>buttons[k]===document.activeElement);if(i<0)return;const k=event.key==='ArrowRight'?keys[(i+1)%keys.length]:event.key==='ArrowLeft'?keys[(i+keys.length-1)%keys.length]:event.key==='Home'?keys[0]:event.key==='End'?keys.at(-1):null;if(k){event.preventDefault();select(k,true);buttons[k].focus();}};

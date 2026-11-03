@@ -2,7 +2,7 @@
 (() => {
  const $=id=>document.getElementById(id);
  let state,selected=new URLSearchParams(location.search).get('kit'),pending,busy=false,refreshing=false,kindsLoaded=false,previousKind='rock';
- let shownId=null;
+ let shownId=null;const editor=new StudioSpriteEditor();
  const nodes=new Map();
  const status=(text,error=false)=>{ $('prop-status').textContent=text;$('prop-status').className=error?'terrain-error':'terrain-hint';StudioAssets.status(text,error); };
  const active=()=>state?.jobs.some(job=>['queued','running'].includes(job.status));
@@ -30,9 +30,8 @@
   $('prop-projection-hint').textContent=ai?'视角要求会写入生成提示，生成后仍需检查实际画面。':'请选择原图已有的视角，用于接入规格与占地建议；程序不会旋转图片或转换视角。';
   $('prop-generate').disabled=!state||busy||active()||(ai&&!state.image_api_configured);
   const kit=state?.kits.find(k=>k.id===selected);
-  $('prop-remake').disabled=busy||active()||!kit||!kit.integrity.passed;
+  $('prop-edit-settings').disabled=busy||active()||!kit||!kit.integrity.passed;
   $('prop-cleanup').disabled=busy||active()||!kit||!kit.integrity.passed;
-  const noCollision=$('prop-result-usage').value==='none';$('prop-width').disabled=noCollision;$('prop-depth').disabled=noCollision;
   for(const node of nodes.values())node.querySelector('button').disabled=busy||active();
  }
  function show(kit,force=false){
@@ -51,9 +50,6 @@
   $('prop-origin').textContent+=' 投影：'+(kit.view==='isometric_2_1'?'等距2:1（角度待人工验收，锚点为占地中心建议）':'斜俯视')+'。';
   $('prop-preview').src=base+'preview.png';$('prop-overlay').src=base+'anchor_collision.png';
   $('prop-sprite').href=base+'sprite.png';$('prop-download').href=base+'kit.zip';
-  $('prop-result-usage').value=kit.suggested_collision.usage||state.kinds[kit.asset_kind||'rock'].collision_usage;
-  const values={'prop-anchor-x':kit.anchor_px[0],'prop-anchor-y':kit.anchor_px[1],'prop-width':kit.suggested_collision.width_px,'prop-depth':kit.suggested_collision.depth_px};
-  for(const [id,value] of Object.entries(values)){$(id).value=value;$(id).min=id.includes('anchor')?0:1;$(id).max=id.includes('anchor')?kit.canvas_px[0]-1:kit.canvas_px[0];}
   document.dispatchEvent(new CustomEvent('studio:asset',{detail:kit}));
  }
  function jobs(){
@@ -94,7 +90,6 @@
  }
  $('prop-mode').onchange=controls;
  $('prop-kind').onchange=()=>{applyKind();controls();};
- $('prop-result-usage').onchange=controls;
  $('prop-filter').onchange=()=>{selected=null;refresh().catch(e=>status(e.message,true));};
  $('prop-history').onchange=()=>{show(state.kits.find(k=>k.id===$('prop-history').value),true);controls();};
  $('prop-form').onsubmit=async event=>{
@@ -110,11 +105,18 @@
   try{const kit=await api('/api/props/remake',{source_kit:selected,transparency_only:true});StudioAssets.saved();StudioAssets.openKit(kit.id);}
   catch(e){status(e.message,true);}finally{busy=false;controls();}
  };
- $('prop-adjust').onsubmit=async event=>{
-  event.preventDefault();if(busy||active())return;busy=true;controls();
-  try{const data={source_kit:selected,collision_usage:$('prop-result-usage').value,anchor_x:Number($('prop-anchor-x').value),anchor_y:Number($('prop-anchor-y').value),collision_width:Number($('prop-width').value),collision_depth:Number($('prop-depth').value)};
-   const kit=await api('/api/props/remake',data);StudioAssets.saved();StudioAssets.openKit(kit.id);
-  }catch(e){status(e.message,true);}finally{busy=false;controls();}
+ $('prop-edit-settings').onclick=async()=>{
+  try{
+   const kit=state.kits.find(k=>k.id===selected);if(!kit)throw Error('素材不存在');
+   const response=await api('/api/props/settings?kit='+encodeURIComponent(kit.id));
+   const image=new Image();image.src='/prop-asset/'+encodeURIComponent(kit.id)+'/sprite.png';await image.decode();
+   const config={...response.settings,source:{id:kit.id}};
+   editor.open(config,image,async values=>{
+    const saved=await api('/api/props/annotate',{source_kit:kit.id,source_sha256:response.sha256,...values});
+    setTimeout(()=>{StudioAssets.saved();StudioAssets.openKit(saved.id);},0);
+    return {...values,source:{id:saved.id}};
+   });
+  }catch(e){status(e.message,true);}
  };
  setInterval(()=>{if(!busy)refresh().catch(e=>status(e.message,true));},4000);
  refresh().catch(e=>status(e.message,true));

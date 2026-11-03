@@ -17,6 +17,7 @@ from PIL import Image, ImageFilter
 from asset_repository import AssetRepository, atomic, name, read
 from task_lock import task_lock
 from terrain import variant_at
+from asset_projection import contract, diamond
 from terrain_integrity import inspect, require
 
 
@@ -69,6 +70,19 @@ def shoreline_tile(base, water, coverage):
     surface=surface*(1-shallow)+bottom*shallow
     pixels=surface*a+land*(1-a)
     return Image.fromarray(np.clip(np.rint(pixels),0,255).astype('uint8'))
+
+
+def water_collision(bits,width):
+    # Conservative convex shoreline proxy: shared edge crossings are midpoints.
+    # Diagonal water corners join through the centre, matching overlay_connected.
+    corners=[(0,0),(1,0),(1,1),(0,1)]
+    points=[]
+    for i,(u,v) in enumerate(corners):
+        on=bool(bits&(1<<i));following=bool(bits&(1<<((i+1)%4)))
+        if on:points.append((u,v))
+        if on!=following:
+            a,b=corners[(i+1)%4];points.append(((u+a)/2,(v+b)/2))
+    return [[round((u-v)*width/2,4),round((u+v-1)*width/4,4)] for u,v in points]
 
 
 def pond_vertices(width=16,height=10):
@@ -171,13 +185,32 @@ def build(root,grass_kit,sand_kit,size=64,title='草地与沙地共存实验',in
                     coverage.save(folder/relative)
                     entries[-1]['water_mask']=relative
             tiles.append(group)
+        # Keep the original top-down contract; publish an additional iso view.
+        width=size*2
+        iso_atlas=Image.new('RGBA',(width*4,size*4*count))
+        projected=[]
+        for entry in entries:
+            image=diamond(tiles[entry['variant']][entry['corners']],width)
+            relative=f"tiles/isometric_{entry['corners']:02d}_v{entry['variant']}.png"
+            image.save(folder/relative)
+            x,y=entry['atlas_cell'];iso_atlas.paste(image,(x*width,y*size))
+            projected.append(dict(corners=entry['corners'],variant=entry['variant'],
+                image=relative,anchor_px=[size,size/2],atlas_rect_px=[x*width,y*size,width,size]))
+        if mode=='shoreline':
+            for entry in projected:
+                poly=water_collision(entry['corners'],width)
+                entry['polygons']=[poly] if poly else []
+                entry['behavior']='blocking' if poly else 'passable'
+        iso_atlas.save(folder/'isometric_atlas.png')
         report=validate_edges(tiles)
         if not report['passed']: raise ValueError('地形边缘检查失败')
         vertices=pond_vertices() if mode=='shoreline' else example_vertices()
         atlas.save(folder/'atlas.png');render(tiles,vertices,size).save(folder/'preview.png')
         atomic(folder/'manifest.json',{'schema':'studio.terrain-transition/0.1','id':identity,
             'title':title.strip(),'tile_size':size,'sources':sources,'ai_calls':0,
-            'transition_mode':mode,
+            'transition_mode':mode,'view':'isometric_2_1',
+            'projection_spec':{**contract(width),'tiles':projected,'atlas':'isometric_atlas.png',
+                               'source':'program_projection_of_top_down_texture','collision':mode=='shoreline'},
             'asset_family':'water' if mode=='shoreline' else 'surface',
             'asset_role':'shoreline_kit' if mode=='shoreline' else 'surface_transition',
             'corners':{'northwest':1,'northeast':2,'southeast':4,'southwest':8},
@@ -192,20 +225,22 @@ def build(root,grass_kit,sand_kit,size=64,title='草地与沙地共存实验',in
             '两对角为第二地表时中心连第二地表。不要按道路出口位掩码解释本套素材。\n\n'
             'preview.png仅为固定验收样例，展示大面积交界、岛及独立地表斑块。'
             '单组来源搭配多组来源时，单组按组号取模复用。来源成品及各自指纹记录在 sources[].ground_variants。'
-            '本次复用已有成品地表，无新增AI调用。\n',encoding='utf-8')
+            '本次复用已有成品地表，无新增AI调用。\n'
+            '等距场景使用 projection_spec.tiles 中同名 corners/variant，锚点为菱形中心。\n',encoding='utf-8')
         if mode=='shoreline':
             with (folder/'INTEGRATION.md').open('a',encoding='utf-8') as output:
                 output.write('\n## 静态水岸\n\n第一来源为陆地，第二来源为水面。程序在边界生成湿岸和浅水带，'
                              '纯陆地和纯水块保留来源像素。masks/ 为各块水面覆盖率（0=陆，255=水），'
                              '用于后续水面效果；它不是深度、碰撞或可行走数据。preview.png 为固定池塘、岛与小水洼样例。'
-                             '当前只交付静态素材，没有水流、波纹动画、倒影或物理效果。\n')
+                             '静态水面无水流、波纹动画或倒影。等距瓦片的 polygons 为水域阻挡代理，边界按角点中点近似，斜对角连接时保守阻挡。\n')
         if interactive: (folder/'index.html').write_text(HTML,encoding='utf-8')
         manifest=read(folder/'manifest.json')
         if mode=='shoreline':
             manifest['water']={'animated':False,'land_source':0,'water_source':1,
+                               'collision_policy':'conservative_convex_water_coverage_50_percent',
                                'mask_channel':'L','mask_range':[0,255],
                                'shoreline_profile':'damp_bank_shallow_bottom_v1'}
-            manifest['limitations'].append('静态水面，无波纹动画、水流、倒影或碰撞数据')
+            manifest['limitations'].append('静态水面，无波纹动画、水流或倒影；等距水域使用保守凸多边形碰撞代理')
         manifest['files_sha256']={str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest()
                                   for p in sorted(folder.rglob('*')) if p.is_file() and p.name!='manifest.json'}
         atomic(folder/'manifest.json',manifest)

@@ -1,7 +1,6 @@
-"""Project-owned requirements, immutable selections and set delivery.
+"""Project requirements, production context and live material references.
 
-Existing producers keep their own storage and APIs. A project references and
-snapshots their deliveries instead of rewriting legacy packages.
+Legacy selection files remain readable; new library choices store references.
 """
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -88,13 +87,48 @@ def available(root):
                 kind='shore' if m.get('transition_mode')=='shoreline' else 'transition'
                 page_url='/water-shore.html' if kind=='shore' else page
             else: page_url=page
-            image='sprite.png' if family=='prop' else 'assembly.png' if family=='component' else 'preview.png'
+            image='sprite.png' if family in ('prop','building') else 'assembly.png' if family=='component' else 'preview.png'
             result.append(dict(id=m['id'],family=family,kind=kind,title=m.get('title',m['id']),
                                href=page_url+'?kit='+m['id'],image=prefix+m['id']+'/'+image))
     for c in AssetRepository(root).catalog():
         result.append(dict(id=c['id'],family='character',kind='character',title=c['display_name'],
                            href='/characters.html?character='+c['id'],image=None))
     return result
+
+def current_assets(root, p, assets=None, tasks=None, choices=None):
+    """Resolve the live material for each requirement, without making snapshots.
+
+    A later explicit library choice overrides earlier production. New successful
+    output replaces it; a failed or unfinished task leaves the last output visible.
+    """
+    assets = available(root) if assets is None else assets
+    tasks = task_state(root, p) if tasks is None else tasks
+    choices = candidates(root, p) if choices is None else choices
+    result = {}
+    for entry in p['items']:
+        selected = entry.get('asset_ref') or entry.get('selected') or {}
+        current = next((a for a in assets if a['id'] == selected.get('asset')
+                        and a['family'] == selected.get('family')), None)
+        for task in tasks:
+            if task.get('context', {}).get('item') != entry['id']:
+                continue
+            if task.get('created_at', '') <= selected.get('selected_at', '') and selected:
+                continue
+            candidate = next((c for c in reversed(choices) if c['task'] == task['id']), None)
+            if candidate:
+                current = candidate
+            elif task.get('status') not in ('failed', 'missing', 'queued', 'running') and not task.get('error'):
+                output = next((a for a in assets if a['kind'] == entry['kind']
+                               and a['id'] == (task.get('kit') or task.get('character'))), None)
+                if output:
+                    current = output
+        if current:
+            result[entry['id']] = dict(current)
+            if not current.get('image'):
+                from urllib.parse import urlencode
+                result[entry['id']]['image'] = '/api/projects/current-image?' + urlencode(dict(project=p['id'], item=entry['id']))
+    return result
+
 
 def source(root, family, aid):
     name(aid)
@@ -197,13 +231,14 @@ def selection_file(root,pid,selection,kind):
 
 def change(root,data):
     action=data.get('action')
+    obsolete_selection=None
     if action=='create':
         pid=identity();p=dict(id=pid,title=text(data.get('title'),'项目名称',60),revision=0,
                 baseline_revision=1,baseline=baseline(data.get('baseline',{})),items=[],tasks=[],
                 review=None,created_at=now(),updated_at=now(),releases=[])
     else:
         p=load(root,data.get('project'));pid=p['id'];revision(p,data)
-    if action=='adopt_candidate':
+    if action in ('adopt_candidate', 'use_candidate'):
         entry=item(p,data.get('item'))
         candidate=next((c for c in candidates(root,p) if c['id']==data.get('asset') and c['item']==entry['id']),None)
         if not candidate: raise ValueError('候选不属于此清单项')
@@ -212,7 +247,7 @@ def change(root,data):
         directory,job=require_job(root,candidate['task'])
         m=save(root,dict(task=job['id'],revision=job['revision'],attempt=candidate['attempt'],
                evidence_key=file_digest(attempt_folder(directory,candidate['attempt'])/'checks.json'),visual_only=True))
-        data=dict(data,asset=m['id']);action='select'
+        data=dict(data,asset=m['id']);action='set_asset' if action=='use_candidate' else 'select'
     if action=='baseline':
         p['baseline']=baseline(data.get('baseline',{}));p['baseline_revision']+=1;p['review']=None
     elif action=='add':
@@ -248,6 +283,17 @@ def change(root,data):
             if meta['view'] not in (p['baseline']['view'],'custom'): raise ValueError('模板视角与项目不一致')
         entry['template_id']=template or None
         p['review']=None
+    elif action=='set_asset':
+        entry=item(p,data.get('item'));family=KINDS[entry['kind']][2];aid=name(data.get('asset'))
+        if not any(a['family']==family and a['id']==aid and a['kind']==entry['kind'] for a in available(root)):
+            raise ValueError('素材不属于清单要求的类别')
+        source(root,family,aid)  # Validate the live output; do not copy ZIPs or pictures.
+        previous=entry.get('selected')
+        entry['asset_ref']=dict(asset=aid,family=family,selected_at=now())
+        entry['selected']=None;entry['placement']=None;p['review']=None
+        if previous and not any((i.get('selected') or {}).get('sha256')==previous['sha256']
+                                for i in p['items']+p.get('archived_items',[])):
+            obsolete_selection=name(previous['sha256'])
     elif action=='select':
         entry=item(p,data.get('item'));family=KINDS[entry['kind']][2];aid=name(data.get('asset'))
         options=available(root)
@@ -260,6 +306,7 @@ def change(root,data):
         archive=output/(sha+'.zip');preview=output/(sha+'.png')
         if archive.exists() and archive.read_bytes()!=content: raise ValueError('快照冲突')
         archive.write_bytes(content);preview.write_bytes(raw)
+        entry.pop('asset_ref',None)
         entry['selected']=dict(asset=aid,family=family,sha256=sha,image_sha256=digest(raw),
                                canvas_px=list(image.size),baseline_revision=p['baseline_revision'],
                                selected_at=now(),**meta)
@@ -272,17 +319,23 @@ def change(root,data):
     elif action=='archive_item':
         entry=item(p,data.get('item'));p['items'].remove(entry)
         p.setdefault('archived_items',[]).append(entry);p['review']=None
+    elif action=='delete_item':
+        entry=item(p,data.get('item'));p['items'].remove(entry);p['review']=None
+        # Selected previews/ZIPs are shared by content hash within one project.
+        selected=entry.get('selected')
+        if selected and not any((i.get('selected') or {}).get('sha256')==selected['sha256'] for i in p['items']+p.get('archived_items',[])):
+            obsolete_selection=name(selected['sha256'])
     elif action=='restore_item':
         if len(p['items'])>=200: raise ValueError('项目清单最多200项')
         entry=next((i for i in p.get('archived_items',[]) if i['id']==data.get('item')),None)
         if not entry: raise ValueError('归档清单项不存在')
         p['archived_items'].remove(entry);p['items'].append(entry);p['review']=None
     elif action=='review':
-        if not any(i['selected'] for i in p['items']): raise ValueError('请先采用素材')
+        current = current_assets(root, p)
+        if not current: raise ValueError('请先制作或选择素材')
         placements=data.get('placements',{})
         for entry in p['items']:
-            if not entry['selected']: continue
-            selection_file(root,pid,entry['selected'],'archive')
+            if entry['id'] not in current: continue
             point=placements.get(entry['id'])
             if not isinstance(point,list) or len(point)!=3 or any(type(v) not in (int,float) or not math.isfinite(v) for v in point):
                 raise ValueError('组合位置无效')
@@ -292,7 +345,11 @@ def change(root,data):
                          note=text(data.get('note',''),'验收备注',empty=True),
                          scope='composition_layout_only',engine_integration='not_tested')
     elif action not in ('create','baseline','add','select'): raise ValueError('项目操作无效')
-    p['revision']+=1;p['updated_at']=now();atomic(folder(root,pid)/'project.json',p);return p
+    p['revision']+=1;p['updated_at']=now();atomic(folder(root,pid)/'project.json',p)
+    if obsolete_selection:
+        for suffix in ('.png','.zip'):
+            (folder(root,pid)/'selected'/(obsolete_selection+suffix)).unlink(missing_ok=True)
+    return p
 
 def context(root,data):
     c=data.get('studio_context')
@@ -404,21 +461,3 @@ def task_state(root,p):
         result.append(dict(**t,status=j.get('status','missing'),stage=j.get('stage',j.get('action','')),
                            error=j.get('error'),kit=j.get('kit_id',j.get('kit')),character=j.get('character')))
     return result
-
-def release(root,data):
-    p=load(root,data.get('project'));revision(p,data)
-    if not p['items'] or any(not i['selected'] for i in p['items']):
-        raise ValueError('请先为清单中每项素材采用成果')
-    rid=identity();output=BytesIO();snapshot=json.loads(json.dumps(p));snapshot.pop('releases',None)
-    snapshot.update(release=rid,production_ready=False,game_integration='not_tested')
-    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
-        for entry in p['items']:
-            archive.writestr('assets/'+entry['id']+'.zip',selection_file(root,p['id'],entry['selected'],'archive'))
-        archive.writestr('project.json',json.dumps(snapshot,ensure_ascii=False,indent=2))
-        archive.writestr('README.txt','素材按清单项分包保存，project.json记录选用版本、共同基准和组合位置。\n采用素材不代表物理、遮挡或引擎验收通过；请按各包接入说明使用。\n')
-    content=output.getvalue()
-    path=AssetRepository(root).scoped('.local/studio/projects/'+p['id']+'/releases','.local/studio/projects/'+p['id'])
-    path.mkdir(exist_ok=True)
-    (path/(rid+'.zip')).write_bytes(content)
-    p['releases'].append(dict(id=rid,sha256=digest(content),created_at=now(),baseline_revision=p['baseline_revision']))
-    p['revision']+=1;p['updated_at']=now();atomic(folder(root,p['id'])/'project.json',p);return p

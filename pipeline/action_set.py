@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 from asset_repository import AssetRepository, atomic, name, read
 from game_package import build
+from task_lock import serialized
 
 
 def path(root, character):
@@ -98,6 +99,7 @@ def inspect(root, character, recipe=None):
     return {'status':'blocked' if errors else 'review' if warnings else 'ready', 'complete':not errors, 'errors':errors, 'warnings':list(dict.fromkeys(warnings)), 'actions':rows}
 
 
+@serialized(lambda root, *args, **kwargs: root)
 def save(root, character, data):
     target = path(root, character)
     if not target.parent.is_dir(): raise ValueError('人物不存在')

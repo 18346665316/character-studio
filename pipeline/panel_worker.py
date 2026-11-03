@@ -121,10 +121,20 @@ def execute(job, persist):
         outputs['review'] = str(review(character, params['batch'], capture_only=not params.get('heading_file'), heading_file=params.get('heading_file')).relative_to(studio.BASE_DIR))
     elif action == 'palette':
         from palette_delivery import run
-        outputs['delivery']=str(run(studio.BASE_DIR,character,params))
+        from current_delivery import publish
+        result=run(studio.BASE_DIR,character,params)
+        outputs['delivery']=str(publish(studio.BASE_DIR,character,result,params['timing_delivery']))
+        if not params.get('palette_id') and not params.get('label'):
+            # Unnamed working colors live in the result, not in the user's palette library.
+            import shutil
+            shutil.rmtree(studio.BASE_DIR/'palettes'/result.name,ignore_errors=True)
+        studio.progress_update(character,'complete','当前动作已更新',status='complete',output=outputs['delivery'])
     elif action == 'compact':
         from compact_delivery import run
-        outputs['delivery']=str(run(studio.BASE_DIR,character,params))
+        from current_delivery import publish
+        result=run(studio.BASE_DIR,character,params)
+        outputs['delivery']=str(publish(studio.BASE_DIR,character,result,params['delivery']))
+        studio.progress_update(character,'complete','当前动作已更新',status='complete',output=outputs['delivery'])
     elif action == 'sequence':
         from sequence_render import render
         outputs['sequence_preview']=render(studio.BASE_DIR,character,params['plan'])

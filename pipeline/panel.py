@@ -506,16 +506,51 @@ def handler(panel):
                 return self.respond({'error':'仅允许本机访问'},code=403)
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
+            if parsed.path == '/api/delete/inspect':
+                from deletion import inspect
+                try:
+                    with panel.mutex:
+                        return self.respond(dict(token=panel.token,**inspect(panel.root,{k:v[0] for k,v in query.items()})))
+                except (ValueError,KeyError,OSError,TypeError) as exc:
+                    return self.respond({'error':str(exc)},code=400)
+            if parsed.path.startswith('/api/module-scenes/'):
+                from scene_modules import state, image_bytes, export, library
+                try:
+                    if parsed.path=='/api/module-scenes/state':
+                        return self.respond(dict(token=panel.token,**state(panel.root,query.get('scene',[None])[0])))
+                    if parsed.path=='/api/module-scenes/library':
+                        return self.respond(dict(assets=library(panel.root)))
+                    if parsed.path=='/api/module-scenes/image':
+                        return self.respond(image_bytes(panel.root,query.get('file',[''])[0]),'image/png')
+                    if parsed.path=='/api/module-scenes/export':
+                        return self.respond(export(panel.root,query.get('scene',[''])[0]),'application/zip')
+                    raise ValueError('未知场景接口')
+                except (ValueError,KeyError,OSError,TypeError) as exc:
+                    return self.respond({'error':str(exc)},code=400)
             if parsed.path == '/api/projects/state':
-                from studio_projects import catalog,load,available,task_state,KINDS,production_plan,candidates
+                from studio_projects import catalog,load,available,task_state,KINDS,production_plan,candidates,current_assets
                 try:
                     from building_templates import catalog as template_catalog
                     projects=catalog(panel.root)
                     selected=load(panel.root,query['project'][0]) if query.get('project') else None
+                    assets=available(panel.root);tasks=task_state(panel.root,selected) if selected else []
+                    choices=candidates(panel.root,selected) if selected else []
                     return self.respond(dict(token=panel.token,projects=projects,selected=selected,
                         production={e['id']:production_plan(panel.root,selected,e) for e in selected['items']} if selected else {},
-                        candidates=candidates(panel.root,selected) if selected else [],templates=template_catalog(panel.root),assets=available(panel.root),tasks=task_state(panel.root,selected) if selected else [],
+                        candidates=choices,templates=template_catalog(panel.root),assets=assets,tasks=tasks,
+                        current=current_assets(panel.root,selected,assets,tasks,choices) if selected else {},
+                        covers={pr['id']:list(current_assets(panel.root,pr,assets).values())[:4] for pr in projects} if not selected else {},
                         kinds={k:dict(label=v[0],workbench=v[1],family=v[2]) for k,v in KINDS.items()}))
+                except (ValueError,KeyError,OSError) as exc:
+                    return self.respond({'error':str(exc)},code=400)
+            if parsed.path == '/api/projects/current-image':
+                from studio_projects import load, item, current_assets, preview
+                try:
+                    p=load(panel.root,query.get('project',[''])[0]);entry=item(p,query.get('item',[''])[0])
+                    current=current_assets(panel.root,p).get(entry['id'])
+                    if not current: raise ValueError('暂无素材图片')
+                    image=preview(panel.root,p,entry,current['id'])['image']
+                    return self.respond(base64.b64decode(image.split(',',1)[1]),'image/png')
                 except (ValueError,KeyError,OSError) as exc:
                     return self.respond({'error':str(exc)},code=400)
             if parsed.path == '/api/projects/preview':
@@ -546,7 +581,7 @@ def handler(panel):
                                    '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
-                if parsed.path in ('/building-structure.html','/building-structure.js','/buildings.html','/buildings.js','/components.html','/components.js','/props.html','/props.js'):
+                if parsed.path in ('/sprite-editor.js','/module-scenes.html','/module-scenes.js','/module-scenes.css','/building-structure.html','/building-structure.js','/buildings.html','/buildings.js','/components.html','/components.js','/props.html','/props.js'):
                     file=STATIC/parsed.path[1:]
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/image-provider':
@@ -591,6 +626,12 @@ def handler(panel):
                     load_package(panel.root,parts[0])
                     path=panel.scoped('building-kits/'+name(parts[0])+'/'+parts[1],'building-kits')
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path == '/api/props/settings':
+                    from static_props import load_package, module_settings
+                    from hashlib import sha256
+                    kit=name(query.get('kit',[''])[0]);m=load_package(panel.root,kit)
+                    raw=(panel.root/'prop-kits'/kit/'kit.zip').read_bytes()
+                    return self.respond(dict(settings=module_settings(m),sha256=sha256(raw).hexdigest()))
                 if parsed.path == '/api/props/state':
                     from static_props import catalog, KINDS
                     from terrain_images import configured, provider_info
@@ -754,7 +795,13 @@ def handler(panel):
                     from studio_projects import context,inherit,record_task,ROUTES
                     project_context=context(panel.root,data) if route in ROUTES else None
                     inherit(panel.root,project_context,route,data)
-                    if route == '/api/projects/change':
+                    if route == '/api/delete':
+                        from deletion import delete
+                        result=delete(panel.root,data)
+                    elif route == '/api/module-scenes/change':
+                        from scene_modules import change
+                        result=change(panel.root,data)
+                    elif route == '/api/projects/change':
                         from studio_projects import change
                         result=change(panel.root,data)
                     elif route == '/api/projects/generate':
@@ -770,9 +817,6 @@ def handler(panel):
                             result=panel.start_building(dict(task=result['id'],revision=result['revision']))
                         else:
                             result=panel.start_terrain(plan['data'],props=route=='/api/props/generate',components=route=='/api/components/generate')
-                    elif route == '/api/projects/release':
-                        from studio_projects import release
-                        result=release(panel.root,data)
                     elif route == '/api/image-provider':
                         from image_provider_settings import switch
                         result=switch(panel.root,data)
@@ -804,6 +848,12 @@ def handler(panel):
                         result=publish(panel.root,data.get('task'),data.get('revision'))
                     elif route == '/api/props/generate':
                         result=panel.start_terrain(data,props=True)
+                    elif route == '/api/props/annotate':
+                        from static_props import annotate
+                        result=annotate(panel.root,data)
+                    elif route == '/api/props/import-exact':
+                        from static_props import import_exact
+                        result=import_exact(panel.root,data)
                     elif route == '/api/props/remake':
                         from static_props import remake
                         result=read(remake(panel.root,data)/'manifest.json')

@@ -445,6 +445,8 @@ def catalog(root):
 def remake(root,data):
     with task_lock(root):
         source_id=name(data.get('source_kit'));manifest=load_package(root,source_id)
+        if manifest.get('module_settings') and not data.get('transparency_only'):
+            raise ValueError('此素材使用多区域设置，请通过统一素材设置另存版本')
         if data.get('transparency_only') and manifest['provenance'].get('art_source')!='ai_complete_object':
             raise ValueError('仅支持重新处理Studio生成的AI物件；导入图片保留原处理规则')
         folder=AssetRepository(root).scoped('prop-kits/'+source_id,'prop-kits')
@@ -486,6 +488,134 @@ def execute(root,job_id):
         except Exception as error:
             job.update(status='failed',stage='制作失败',error=str(error))
         atomic(folder/'job.json',job)
+
+
+
+
+def module_settings(manifest):
+    """One adapter for legacy prop packages and current annotation versions."""
+    from sprite_contract import settings
+    if manifest.get('module_settings'):
+        return settings(manifest['module_settings'])
+    suggestion=manifest['suggested_collision']
+    shapes=suggestion.get('polygons')
+    if shapes is None: shapes=[suggestion['polygon']] if suggestion.get('polygon') else []
+    # Optional legacy footprints remain opt-in, as stated in their source contract.
+    blocking=suggestion.get('usage')=='blocking' and bool(shapes)
+    return settings(dict(title=manifest['title'],anchor=manifest['anchor_px'],
+                         behavior='blocking' if blocking else 'passable',polygons=shapes if blocking else []))
+
+
+def _publish_annotation(root, files, manifest, config):
+    """Publish an immutable prop version without touching its raster art."""
+    package_id=identity();manifest=json.loads(json.dumps(manifest))
+    manifest.update(id=package_id,title=config['title'],created_at=datetime.now(timezone.utc).isoformat(),
+        anchor_px=config['anchor'],sprite_offset_px=[-v for v in config['anchor']],module_settings=config,
+        production_ready=False)
+    manifest['display_spec']=dict(world_scale=config['world_scale'],
+        canvas_world_units=[v*config['world_scale'] for v in manifest['canvas_px']],
+        reference_cell_units=[128,64],units='screen_world_units',transform='uniform_scale_about_anchor')
+    shapes=config['polygons'];points=[p for poly in shapes for p in poly]
+    width=max(p[0] for p in points)-min(p[0] for p in points) if points else 1
+    depth=max(p[1] for p in points)-min(p[1] for p in points) if points else 1
+    manifest['suggested_collision']=dict(enabled_by_default=False,suggestions_only=True,
+        coordinate_space='anchor_local_px',polygons=shapes,polygon=shapes[0] if len(shapes)==1 else [],
+        width_px=width,depth_px=depth,usage='none' if not shapes else 'blocking',
+        source='manual_convex_regions',layers_and_masks='caller_defined',
+        note='polygons is authoritative; polygon is populated only for a single region')
+    manifest['validation']=dict(art='pending',anchor='manual_annotation',engine_physics='not_tested',occlusion='not_tested')
+    with Image.open(BytesIO(files['sprite.png'])) as im:
+        rgba=im.convert('RGBA');w,h=rgba.size
+    preview=Image.new('RGB',(w*3,h))
+    for i,color in enumerate(('#e3e6dc','#34443e','#8a9a82')):
+        layer=Image.new('RGB',(w,h),color);layer.paste(rgba,(0,0),rgba);preview.paste(layer,(i*w,0))
+    stream=BytesIO();preview.save(stream,format='PNG');files['preview.png']=stream.getvalue()
+    overlay=Image.new('RGB',(w,h),'#34443e');overlay.paste(rgba,(0,0),rgba);draw=ImageDraw.Draw(overlay)
+    x,y=config['anchor']
+    for poly in shapes:
+        p=[(a+x,b+y) for a,b in poly];draw.line(p+[p[0]],fill='#ff9a7c',width=2)
+    draw.line([(x-6,y),(x+6,y)],fill='#7affa4',width=2);draw.line([(x,y-6),(x,y+6)],fill='#7affa4',width=2)
+    stream=BytesIO();overlay.save(stream,format='PNG');files['anchor_collision.png']=stream.getvalue()
+    files['module-settings.json']=json.dumps(config,ensure_ascii=False,indent=2).encode()
+    files['INTEGRATION.md']=('# Sprite settings\n\nAnchor: image pixels; collision polygons: anchor-local screen pixels, Y down.\n'
+        'module_settings.world_scale (default 1) converts image pixels to scene units. Multiply image dimensions, anchor offsets and collision vertices by the SAME scalar; instance positions remain world units. Never resample the original PNG.\n'
+        'module_settings / module-settings.json and suggested_collision.polygons describe all convex regions.\n'
+        'For openings, keep the gap between polygons. Do not fill it with a bounding box.\n'
+        'These are manual annotations, not verified physics or occlusion. Original raster art is unchanged.\n').encode()
+    manifest['files_sha256']={k:hashlib.sha256(v).hexdigest() for k,v in files.items()}
+    raw=json.dumps(manifest,ensure_ascii=False,indent=2).encode()
+    staging=AssetRepository(root).scoped('.local/prop-builds/'+package_id,'.local/prop-builds');staging.mkdir(parents=True)
+    try:
+        for relative,content in files.items():
+            file=staging/relative;file.parent.mkdir(parents=True,exist_ok=True);file.write_bytes(content)
+        (staging/'manifest.json').write_bytes(raw)
+        with zipfile.ZipFile(staging/'kit.zip','w',zipfile.ZIP_DEFLATED) as archive:
+            for relative,content in files.items():archive.writestr(relative,content)
+            archive.writestr('manifest.json',raw)
+        target=Path(root)/'prop-kits'/package_id;target.parent.mkdir(parents=True,exist_ok=True);staging.rename(target)
+    except Exception:
+        shutil.rmtree(staging,ignore_errors=True);raise
+    return manifest
+
+
+def annotate(root,data):
+    from sprite_contract import settings
+    config=settings(data)
+    with task_lock(root):
+        source_id=name(data.get('source_kit'));manifest=load_package(root,source_id)
+        if data.get('source_sha256') and hashlib.sha256((Path(root)/'prop-kits'/source_id/'kit.zip').read_bytes()).hexdigest()!=data['source_sha256']:
+            raise ValueError('素材来源已变化，请重新载入')
+        with zipfile.ZipFile(Path(root)/'prop-kits'/source_id/'kit.zip') as archive:
+            files={n:archive.read(n) for n in manifest['files_sha256']}
+        manifest['provenance']={**manifest.get('provenance',{}),'parent_kit':source_id,'this_build':'annotation_no_ai_no_raster_change'}
+        return _publish_annotation(root,files,manifest,config)
+
+
+def from_building(root,data):
+    """Register an immutable building delivery in the shared sprite editor.
+
+    The original building ZIP travels inside the derived library version. Art is
+    unchanged; view is a caller-declared scene compatibility choice.
+    """
+    from building_pipeline import load_package as load_building
+    with task_lock(root):
+        original=load_building(root,name(data.get('kit')))
+        path=Path(root)/'building-kits'/original['id']
+        integration=read(path/'integration.json')
+        with Image.open(path/'sprite.png') as image:size=list(image.size)
+        raw=(path/'sprite.png').read_bytes();source=(path/'kit.zip').read_bytes()
+        from sprite_contract import settings
+        config=settings(dict(title=original['title'],anchor=integration['anchor_px'],behavior='passable',polygons=[]))
+        files={'sprite.png':raw,'cutout.png':raw,'inputs/original.png':raw,'inputs/source-building.zip':source,
+            'production.json':json.dumps(dict(mode='building_delivery_adapter',source=original['id'])).encode(),'prompt.txt':b''}
+        manifest=dict(schema='studio.static-prop/0.1',asset_family='static_prop',asset_kind='custom',
+            view=validate_projection(data.get('projection',ISOMETRIC),'orthographic_three_quarter'),canvas_px=size,
+            provenance=dict(art_source='studio_building_delivery',parent_building=original['id'],
+                source_building_sha256=hashlib.sha256(source).hexdigest(),this_build='building_adapter_no_raster_change'),
+            processing=dict(method='building_delivery_adapter'),normalization={},limitations=['Building projection needs visual review; no collision inferred.'])
+        return _publish_annotation(root,files,manifest,config)
+
+
+def import_exact(root,data):
+    """Common library import for already prepared transparent game sprites."""
+    from sprite_contract import settings
+    raw=base64.b64decode(data.get('image','').split(',')[-1],validate=True)
+    if not raw or len(raw)>8*1024*1024:raise ValueError('PNG需小于8MB')
+    with Image.open(BytesIO(raw)) as image:
+        if image.format!='PNG' or image.mode not in ('RGBA','LA') or max(image.size)>2048:
+            raise ValueError('请导入不超过2048px的透明PNG')
+        image.load()
+        if image.getchannel('A').getextrema()[0]==255:raise ValueError('PNG需要包含透明背景')
+        size=list(image.size)
+    config=settings(dict(title=data.get('title'),anchor=[size[0]/2,size[1]],behavior='passable',polygons=[]))
+    view=validate_projection(data.get('projection',ISOMETRIC),'orthographic_three_quarter')
+    files={k:raw for k in ('sprite.png','cutout.png','inputs/original.png')}
+    spec=dict(title=config['title'],mode='import',kind='custom',size=size[0],projection=view,description='',collision_usage='none')
+    files.update({'production.json':json.dumps(spec).encode(),'prompt.txt':b''})
+    manifest=dict(schema='studio.static-prop/0.1',asset_family='static_prop',asset_kind='custom',view=view,
+        provenance={'art_source':'external_complete_object','this_build':'exact_png_import_no_raster_change'},canvas_px=size,
+        image='sprite.png',processing={'method':'exact_png_import'},normalization={'world_scale':'caller_defined'},limitations=[])
+    with task_lock(root):return _publish_annotation(root,files,manifest,config)
 
 
 if __name__=='__main__':

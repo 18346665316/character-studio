@@ -96,6 +96,12 @@ class PanelOperationsBrowserTests(unittest.TestCase):
                 route.fulfill(status=400, json={'error': '请求被拒绝（测试）'})
         elif path == '/api/props/state':
             route.fulfill(json=self.props)
+        elif path == '/api/props/settings':
+            from urllib.parse import parse_qs
+            identity=parse_qs(urlparse(route.request.url).query)['kit'][0]
+            item=next(k for k in self.props['kits'] if k['id']==identity)
+            route.fulfill(json={'sha256':'test','settings':{'title':item['title'],'anchor':item['anchor_px'],
+                'behavior':'blocking','polygons':[[[-50,-25],[50,-25],[50,25],[-50,25]]]}})
         elif path == '/api/terrain/state':
             route.fulfill(json=self.terrain)
         elif path == '/api/components/state':
@@ -109,7 +115,8 @@ class PanelOperationsBrowserTests(unittest.TestCase):
         self.page.goto(self.url + '/props.html?kit=' + identity)
         self.page.wait_for_selector('#prop-result:not([hidden])')
         self.page.get_by_role('tab', name='调整', exact=True).click()
-        self.page.wait_for_function("() => document.querySelector('#prop-live-overlay').getContext('2d').getImageData(0,0,1,1).data[3]>0")
+        self.page.click('#prop-edit-settings')
+        self.page.wait_for_selector('#module-dialog[open]')
 
     def test_new_page_never_borrows_a_historical_result(self):
         self.page.goto(self.url + '/props.html')
@@ -120,21 +127,22 @@ class PanelOperationsBrowserTests(unittest.TestCase):
         self.assertFalse(self.errors)
 
     def test_related_version_switch_and_reload_keep_draft(self):
+        self.page.on('dialog',lambda d:d.accept())
         self.open_prop()
-        canvas = self.page.locator('#prop-live-overlay')
-        before = canvas.evaluate('(canvas) => canvas.toDataURL()')
-        self.page.locator('#prop-anchor-x').fill('17.5')
-        self.assertNotEqual(before, canvas.evaluate('(canvas) => canvas.toDataURL()'))
-        self.page.get_by_role('tab', name='来源与记录', exact=True).click()
-        self.assertEqual(set(self.page.locator('#prop-history option').evaluate_all(
-            '(options) => options.map(option => option.value)')), {'a', 'b'})
-        self.page.locator('#prop-history').select_option('b')
-        self.page.locator('#prop-history').select_option('a')
-        self.page.get_by_role('tab', name='调整', exact=True).click()
-        self.assertEqual(self.page.locator('#prop-anchor-x').input_value(), '17.5')
+        canvas=self.page.locator('#module-canvas')
+        before=canvas.evaluate('(c)=>c.toDataURL()')
+        self.page.click('#view-annotation')
+        self.page.fill('#anchor-x','17.5');self.page.locator('#anchor-x').blur()
+        self.assertNotEqual(before,canvas.evaluate('(c)=>c.toDataURL()'))
+        self.open_prop('b')
+        self.assertEqual(self.page.input_value('#anchor-x'),'128')
+        self.open_prop('a')
+        self.assertEqual(self.page.input_value('#anchor-x'),'17.5')
         self.page.reload()
-        self.page.wait_for_selector('#prop-live-overlay')
-        self.assertEqual(self.page.locator('#prop-anchor-x').input_value(), '17.5')
+        self.page.wait_for_selector('#prop-edit-settings')
+        self.page.click('#prop-edit-settings')
+        self.page.wait_for_selector('#module-dialog[open]')
+        self.assertEqual(self.page.input_value('#anchor-x'),'17.5')
         self.assertFalse(self.errors)
 
     def test_task_error_is_visible_and_completed_task_opens_exact_result(self):
@@ -280,9 +288,12 @@ class PanelOperationsBrowserTests(unittest.TestCase):
     def test_anchor_pointer_and_mobile_page_fit(self):
         self.open_prop()
         self.page.set_viewport_size({'width': 390, 'height': 844})
-        self.page.locator('#prop-live-overlay').click(position={'x': 30, 'y': 30})
-        self.assertNotEqual(self.page.locator('#prop-anchor-x').input_value(), '128')
-        self.assertTrue(self.page.locator('.asset-draft-note').is_visible())
+        self.page.click('#view-annotation')
+        self.page.select_option('#edit-mode','anchor')
+        self.page.locator('#module-canvas').click(position={'x': 30, 'y': 30})
+        self.assertNotEqual(self.page.locator('#anchor-x').input_value(), '128')
+        self.page.on('dialog',lambda d:d.accept())
+        self.page.click('#close-editor')
         for tab in ['预览', '调整', '来源与记录']:
             self.page.get_by_role('tab', name=tab, exact=True).click()
             self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth'))

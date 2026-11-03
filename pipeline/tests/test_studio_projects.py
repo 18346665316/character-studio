@@ -39,20 +39,12 @@ class ProjectTests(unittest.TestCase):
     def select(self):self.update(action='select',item=self.entry,asset=self.asset)
     def review(self):self.update(action='review',checks=dict(style=True,scale=True,view=True),placements={self.entry:[300,400,1]},note='仅视觉检查')
 
-    def test_selection_snapshot_survives_source_changes_and_release_is_immutable(self):
-        self.select();self.review()
-        selected=self.project['items'][0]['selected'];original=projects.selection_file(self.root,self.project['id'],selected,'archive')
+    def test_legacy_snapshot_remains_readable_after_source_changes(self):
+        self.select()
+        selected=self.project['items'][0]['selected']
+        original=projects.selection_file(self.root,self.project['id'],selected,'archive')
         (self.root/'prop-kits'/self.asset/'sprite.png').write_bytes(b'changed')
-        self.project=projects.release(self.root,dict(project=self.project['id'],revision=self.project['revision']))
-        release=self.project['releases'][0];path=projects.folder(self.root,self.project['id'])/'releases'/(release['id']+'.zip')
-        with zipfile.ZipFile(path) as archive:
-            self.assertEqual(archive.read('assets/'+self.entry+'.zip'),original)
-            manifest=json.loads(archive.read('project.json'));self.assertFalse(manifest['production_ready'])
-            self.assertEqual(manifest['review']['scope'],'composition_layout_only')
-        before=path.read_bytes();self.update(action='baseline',baseline=dict(style='冷色石造'))
-        self.assertIsNone(self.project['review']);self.assertEqual(path.read_bytes(),before)
-        self.project=projects.release(self.root,dict(project=self.project['id'],revision=self.project['revision']))
-        self.assertEqual(len(self.project['releases']),2)
+        self.assertEqual(projects.selection_file(self.root,self.project['id'],selected,'archive'),original)
 
     def test_stale_revision_cross_kind_and_path_escape_are_rejected(self):
         with self.assertRaisesRegex(ValueError,'更新'):projects.change(self.root,dict(project=self.project['id'],revision=0,action='add',kind='prop',title='旧页面'))
@@ -60,19 +52,16 @@ class ProjectTests(unittest.TestCase):
         self.update(action='add',kind='building',title='住宅')
         with self.assertRaisesRegex(ValueError,'类别'):self.update(action='select',item=self.project['items'][1]['id'],asset=self.asset)
 
-    def test_preview_never_adopts_and_release_needs_no_review_but_requires_all_items(self):
+    def test_preview_is_read_only_and_combination_does_not_require_all_items(self):
         before=projects.load(self.root,self.project['id'])
-        candidate=projects.preview(self.root,before,before['items'][0],self.asset)
-        self.assertTrue(candidate['image'].startswith('data:image/png;base64,'))
+        preview=projects.preview(self.root,before,before['items'][0],self.asset)
+        self.assertTrue(preview['image'].startswith('data:image/png;base64,'))
         self.assertEqual(projects.load(self.root,self.project['id']),before)
-        self.select()
-        self.assertIsNone(self.project['review'])
-        self.project=projects.release(self.root,dict(project=self.project['id'],revision=self.project['revision']))
-        self.assertEqual(len(self.project['releases']),1)
+        self.update(action='set_asset',item=self.entry,asset=self.asset)
         self.update(action='add',kind='ground',title='草地')
-        with self.assertRaisesRegex(ValueError,'每项'):projects.release(self.root,dict(project=self.project['id'],revision=self.project['revision']))
         self.update(action='review',placements={self.entry:[300,400,1]})
         self.assertEqual(self.project['review']['checks'],{})
+        self.assertEqual(self.project['releases'],[])
 
     def test_generated_building_can_be_previewed_then_adopted_directly(self):
         import building_pipeline as bp
@@ -97,11 +86,46 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(selection['family'],'building')
         self.assertTrue(projects.selection_file(self.root,self.project['id'],selection,'archive'))
 
-    def test_snapshot_tamper_and_incomplete_review_are_rejected(self):
-        with self.assertRaisesRegex(ValueError,'采用'):self.review()
-        self.select();s=self.project['items'][0]['selected']
-        path=projects.folder(self.root,self.project['id'])/'selected'/(s['sha256']+'.zip');path.write_bytes(b'broken')
-        with self.assertRaisesRegex(ValueError,'快照'):self.review()
+    def test_combination_uses_live_material_instead_of_old_snapshot(self):
+        with self.assertRaisesRegex(ValueError,'素材'): self.review()
+        self.select();selection=self.project['items'][0]['selected']
+        path=projects.folder(self.root,self.project['id'])/'selected'/(selection['sha256']+'.zip')
+        path.write_bytes(b'broken')
+        self.review()
+        self.assertEqual(self.project['items'][0]['placement'],[300,400,1])
+
+    def test_library_choice_is_a_reference_without_copied_outputs(self):
+        self.update(action='set_asset',item=self.entry,asset=self.asset)
+        self.assertIsNone(self.project['items'][0]['selected'])
+        self.assertEqual(projects.current_assets(self.root,self.project)[self.entry]['id'],self.asset)
+        self.assertFalse((projects.folder(self.root,self.project['id'])/'selected').exists())
+        self.review()
+
+    def test_library_reference_rejects_broken_source(self):
+        (self.root/'prop-kits'/self.asset/'sprite.png').write_bytes(b'broken')
+        with self.assertRaises(ValueError):
+            self.update(action='set_asset',item=self.entry,asset=self.asset)
+        saved=projects.load(self.root,self.project['id'])
+        self.assertNotIn('asset_ref',saved['items'][0])
+
+    def test_current_output_appears_without_adoption_and_survives_failed_retry(self):
+        assets=projects.available(self.root)
+        tasks=[dict(id='first',context=dict(item=self.entry),status='complete',kit=self.asset)]
+        current=projects.current_assets(self.root,self.project,assets,tasks,[])
+        self.assertEqual(current[self.entry]['id'],self.asset)
+        tasks.append(dict(id='retry',context=dict(item=self.entry),status='failed',error='fixture'))
+        self.assertEqual(projects.current_assets(self.root,self.project,assets,tasks,[]),current)
+        self.assertIsNone(self.project['items'][0]['selected'])
+
+    def test_explicit_choice_overrides_older_tasks_but_new_success_replaces_it(self):
+        self.update(action='set_asset',item=self.entry,asset=self.asset)
+        chosen=self.project['items'][0]['asset_ref']['selected_at']
+        newer=dict(projects.available(self.root)[0],id='new-output')
+        tasks=[dict(id='old',context=dict(item=self.entry),status='complete',kit='new-output',created_at='2000-01-01')]
+        assets=projects.available(self.root)+[newer]
+        self.assertEqual(projects.current_assets(self.root,self.project,assets,tasks,[])[self.entry]['id'],self.asset)
+        tasks.append(dict(id='new',context=dict(item=self.entry),status='complete',kit='new-output',created_at='2099-01-01'))
+        self.assertEqual(projects.current_assets(self.root,self.project,assets,tasks,[])[self.entry]['id'],'new-output')
 
     def test_baseline_is_snapshotted_and_stale_workbench_rejected(self):
         self.update(action='baseline',baseline=dict(style='手绘',palette='暖色'))
@@ -235,6 +259,13 @@ class ProjectHTTPTests(ProjectTests):
         with urlopen(Request(self.base+'/api/projects/change',data=payload,headers={'Content-Type':'application/json','X-Studio-Token':state['token']})) as r:created=json.load(r)
         self.assertNotEqual(created['id'],self.project['id']);self.assertEqual(created['items'],[])
 
+    def test_project_release_creation_endpoint_has_been_removed(self):
+        request=Request(self.base+'/api/projects/release',data=json.dumps(dict(project=self.project['id'],revision=self.project['revision'])).encode(),headers={'Content-Type':'application/json','X-Studio-Token':self.panel.token})
+        with self.assertRaises(HTTPError) as error:urlopen(request)
+        self.assertEqual(error.exception.code,404)
+        self.assertEqual(projects.load(self.root,self.project['id'])['releases'],[])
+        self.assertFalse((projects.folder(self.root,self.project['id'])/'releases').exists())
+
     def test_building_prepare_inherits_project_and_records_exact_baseline(self):
         import base64
         self.update(action='baseline',baseline=dict(style='统一手绘',palette='暖灰色'))
@@ -281,7 +312,100 @@ class ProjectHTTPTests(ProjectTests):
             finally:browser.close()
 
     @unittest.skipIf(sync_playwright is None,'Playwright unavailable')
-    def test_browser_select_review_deliver_and_workbench_context(self):
+    def test_workbench_entry_opens_latest_task_instead_of_adopted_source(self):
+        self.select()
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page()
+                with patch('studio_projects.task_state',return_value=[{
+                    'id':'new-task','context':{'item':self.entry},'status':'failed','error':'fixture'}]):
+                    page.goto(self.base+'/?project='+self.project['id'])
+                    page.get_by_role('button',name='详情',exact=True).click()
+                    expect(page.get_by_role('link',name='制作 / 继续生产 →',exact=True)).to_have_attribute('href',__import__('re').compile(r'task=new-task'))
+                    expect(page.locator('.production-preview img').first).to_have_attribute('src',__import__('re').compile('prop-asset/'+self.asset))
+                    expect(page.locator('.production-status')).to_have_count(0)
+                    expect(page.get_by_text('已采用 · 再生成失败',exact=True)).to_have_count(0)
+            finally:browser.close()
+
+    @unittest.skipIf(sync_playwright is None,'Playwright unavailable')
+    def test_character_workbench_retains_task_character_and_has_direct_entry(self):
+        self.update(action='add',kind='character',title='主角')
+        entry=self.project['items'][-1]['id']
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page()
+                with patch('studio_projects.task_state',return_value=[{
+                    'id':'produce-task','context':{'item':entry},'status':'succeeded','character':'hero'}]):
+                    page.goto(self.base+'/?project='+self.project['id'])
+                    card=page.locator('.production-entry').filter(has=page.get_by_role('heading',name='主角',exact=True))
+                    expect(card.get_by_role('link',name='进入工作台',exact=True)).to_have_attribute('href',__import__('re').compile(r'character=hero'))
+                    expect(card.get_by_role('link',name='进入工作台',exact=True)).to_have_attribute('href',__import__('re').compile(r'task=produce-task'))
+                    expect(card.get_by_role('button',name='设置生产',exact=True)).to_have_count(0)
+            finally:browser.close()
+
+    @unittest.skipIf(sync_playwright is None,'Playwright unavailable')
+    def test_generated_material_is_visible_and_can_be_combined_without_confirmation(self):
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+                with patch('studio_projects.task_state',return_value=[dict(id='done',context=dict(item=self.entry),status='complete',kit=self.asset)]):
+                    page.goto(self.base+'/?project='+self.project['id'])
+                    expect(page.locator('.production-preview img')).to_be_visible()
+                    expect(page.locator('.production-status')).to_have_count(0)
+                    expect(page.get_by_role('link',name='交付',exact=True)).to_have_count(0)
+                    page.get_by_role('button',name='查看素材：广场石头').click()
+                    expect(page.locator('.project-material-image')).to_be_visible()
+                    page.get_by_role('button',name='关闭',exact=True).click()
+                    page.get_by_text('验证工具',exact=True).click()
+                    page.get_by_role('link',name='组合预览',exact=True).click()
+                    expect(page.locator('#project-composition')).to_be_visible()
+                    page.get_by_role('button',name='保存组合位置').click()
+                    expect(page.locator('#hub-description')).to_contain_text('组合位置已保存')
+                saved=projects.load(self.root,self.project['id'])
+                self.assertIsNone(saved['items'][0]['selected'])
+                self.assertIsNotNone(saved['items'][0]['placement'])
+                self.assertEqual(errors,[])
+            finally:browser.close()
+
+    @unittest.skipIf(sync_playwright is None,'Playwright unavailable')
+    def test_workbench_has_no_adoption_or_delivery_step(self):
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+                page.goto(self.base+'/props.html?kit='+self.asset+'&project='+self.project['id']+'&item='+self.entry)
+                expect(page.locator('.studio-project-context')).to_be_visible()
+                expect(page.locator('.studio-project-adoption')).to_have_count(0)
+                expect(page.get_by_role('link',name='前往交付',exact=True)).to_have_count(0)
+                page.set_viewport_size(dict(width=390,height=844))
+                self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),392)
+                self.assertEqual(errors,[])
+            finally:browser.close()
+
+    @unittest.skipIf(sync_playwright is None,'Playwright unavailable')
+    def test_saved_material_edit_updates_project_reference_automatically(self):
+        self.update(action='set_asset',item=self.entry,asset=self.asset)
+        image=Image.new('RGBA',(128,128));ImageDraw.Draw(image).rectangle((20,20,100,110),fill='#553322')
+        updated=package(self.root,image,validate(dict(mode='import',kind='rock',title='更新后的石头',projection='isometric_2_1'))).name
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page()
+                page.goto(self.base+'/props.html?kit='+self.asset+'&project='+self.project['id']+'&item='+self.entry)
+                expect(page.locator('.studio-project-context')).to_be_visible()
+                page.evaluate("id=>document.dispatchEvent(new CustomEvent('studio:asset',{detail:{id}}))",updated)
+                expect(page.locator('.studio-project-adoption')).to_have_count(0)
+                page.wait_for_function("async ({url,item,id}) => (await (await fetch(url)).json()).current[item]?.id === id",arg=dict(url=self.base+'/api/projects/state?project='+self.project['id'],item=self.entry,id=updated))
+                saved=projects.load(self.root,self.project['id'])
+                self.assertEqual(saved['items'][0]['asset_ref']['asset'],updated)
+                self.assertFalse((projects.folder(self.root,self.project['id'])/'selected').exists())
+            finally:browser.close()
+
+    @unittest.skipIf(sync_playwright is None,'Playwright unavailable')
+    def test_browser_choose_material_verify_and_edit_without_delivery(self):
         with sync_playwright() as pw:
             browser=pw.chromium.launch(channel='chrome',headless=True)
             page=browser.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
@@ -297,21 +421,19 @@ class ProjectHTTPTests(ProjectTests):
             page.set_viewport_size(dict(width=390,height=844))
             self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),392)
             page.set_viewport_size(dict(width=1280,height=900))
-            page.get_by_role('button',name='挑选已有成果').click()
+            page.get_by_role('button',name='选择已有素材').click()
             expect(page.locator('#asset-options .picker-card')).to_have_count(0)
             page.get_by_role('button',name='素材库',exact=True).click()
-            page.get_by_role('button',name='放入组合比较').click()
-            expect(page.locator('#project-composition')).to_be_visible()
-            self.assertIsNone(projects.load(self.root,self.project['id'])['items'][0]['selected'])
-            expect(page.get_by_role('link',name='组合挑选',exact=True)).to_have_attribute('aria-current','page')
-            page.get_by_role('button',name='采用此结果').click()
+            page.get_by_role('button',name='使用这份素材').click()
             expect(page.locator('#asset-picker')).not_to_be_visible()
-            page.get_by_role('link',name='组合挑选',exact=True).click()
+            self.assertIsNone(projects.load(self.root,self.project['id'])['items'][0]['selected'])
+            page.get_by_text('验证工具',exact=True).click()
+            page.get_by_role('link',name='组合预览',exact=True).click()
             expect(page.locator('#project-composition')).to_be_visible()
             self.assertEqual(page.get_by_role('checkbox').count(),0)
             canvas=page.locator('#project-composition')
             self.assertLess(canvas.bounding_box()['y'],400)
-            page.wait_for_function('() => Array.from(document.images).every(i => i.complete)')
+            page.wait_for_function("() => {const data=document.querySelector('#project-composition').getContext('2d').getImageData(180,200,1,1).data;return data[0]===146&&data[1]===116;}")
             rect=canvas.bounding_box()
             def point(x,y):return (rect['x']+x*rect['width']/1000,rect['y']+y*rect['height']/640)
             page.mouse.click(*point(180,200))
@@ -321,9 +443,10 @@ class ProjectHTTPTests(ProjectTests):
             self.assertAlmostEqual(draft[self.entry][1],270,delta=1)
             page.get_by_role('button',name='保存组合位置').click()
             expect(page.locator('#hub-description')).to_contain_text('组合位置已保存')
-            page.get_by_role('link',name='交付',exact=True).click();page.get_by_role('button',name='导出整套素材').click()
-            expect(page.get_by_role('link',name='下载交付版本',exact=False)).to_be_visible()
-            page.get_by_role('link',name='生产',exact=True).click()
+            expect(page.get_by_role('link',name='交付',exact=True)).to_have_count(0)
+            page.goto(self.base+'/?project='+self.project['id']+'&view=delivery')
+            expect(page.get_by_role('heading',name='素材清单',exact=True)).to_be_visible()
+            self.assertEqual(projects.load(self.root,self.project['id'])['releases'],[])
             expect(page.get_by_role('link',name='制作 / 继续生产')).not_to_be_visible()
             page.get_by_role('button',name='详情',exact=True).click()
             page.get_by_role('link',name='制作 / 继续生产').click()
