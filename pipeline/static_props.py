@@ -116,17 +116,21 @@ def prepare(root,data):
     if reference is not None: reference.save(folder/'inputs/reference.png')
     spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind'],spec['projection']) if spec['mode']=='ai' else '')
     if data.get('wall_axis'):
-        from wall_assets import configure
-        spec['wall_continuous']=bool(data.get('wall_continuous'))
-        configure(folder,spec,data['wall_axis'])
-        spec['wall_surface_projection']=bool(data.get('wall_surface_projection'))
-        if data.get('wall_whole_sprite'):
-            from wall_assets import whole_sprite
-            whole_sprite(folder,spec,root,data.get('wall_style_job'))
-        if data.get('wall_material_job'):
-            if spec.get('wall_whole_sprite'):raise ValueError('一体墙体需独立生成，不能复用材质图片')
-            from wall_assets import reuse_material
-            reuse_material(root,folder,spec,data['wall_material_job'])
+        if data.get('wall_strip_build'):
+            from wall_strip import configure_job
+            configure_job(folder,spec,data['wall_axis'])
+        else:
+            from wall_assets import configure
+            spec['wall_continuous']=bool(data.get('wall_continuous'))
+            configure(folder,spec,data['wall_axis'])
+            spec['wall_surface_projection']=bool(data.get('wall_surface_projection'))
+            if data.get('wall_whole_sprite'):
+                from wall_assets import whole_sprite
+                whole_sprite(folder,spec,root,data.get('wall_style_job'))
+            if data.get('wall_material_job'):
+                if spec.get('wall_whole_sprite'):raise ValueError('一体墙体需独立生成，不能复用材质图片')
+                from wall_assets import reuse_material
+                reuse_material(root,folder,spec,data['wall_material_job'])
     job={'id':job_id,'status':'queued','stage':'等待制作物件','error':None,'spec':spec,
          'created_at':datetime.now(timezone.utc).isoformat()}
     atomic(folder/'job.json',job)
@@ -502,7 +506,12 @@ def execute(root,job_id):
                         progress('复用已生成的完整物件原图')
                     shutil.copyfile(generated,folder/'inputs/original.png')
                 progress('透明背景处理与素材导出')
-                if job['spec'].get('wall_axis'):
+                if job['spec'].get('wall_strip_build'):
+                    progress('自动选择切点并验证重复拼接')
+                    from wall_strip import build_job
+                    manifest=build_job(root,folder,job['spec'])
+                    job['kit_id']=manifest['id']
+                elif job['spec'].get('wall_axis'):
                     from wall_assets import publish
                     manifest=publish(root,folder,job['spec'])
                     job['kit_id']=manifest['id']

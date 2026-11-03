@@ -628,8 +628,8 @@ def handler(panel):
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
                 if parsed.path == '/api/props/wall-template':
                     from wall_assets import validate_axis
-                    from build_courtyard_wall_templates import render_continuous
-                    stream=BytesIO();render_continuous(validate_axis(query.get('axis',[''])[0])).save(stream,'PNG')
+                    from wall_strip import reference
+                    stream=BytesIO();reference(validate_axis(query.get('axis',[''])[0])).save(stream,'PNG')
                     return self.respond(stream.getvalue(),'image/png')
                 if parsed.path == '/api/props/settings':
                     from static_props import load_package, module_settings
@@ -648,7 +648,7 @@ def handler(panel):
                 if parsed.path.startswith('/prop-asset/'):
                     from static_props import load_package
                     parts=unquote(parsed.path[len('/prop-asset/'):]).split('/')
-                    if len(parts)!=2 or parts[1] not in ('sprite.png','preview.png','anchor_collision.png','cutout.png','kit.zip'):
+                    if len(parts)!=2 or parts[1] not in ('sprite.png','preview.png','repeat-preview.png','anchor_collision.png','cutout.png','kit.zip'):
                         raise ValueError('无效物件资源')
                     path=panel.scoped('prop-kits/'+name(parts[0])+'/'+parts[1],'prop-kits')
                     if parts[1]=='kit.zip': load_package(panel.root,parts[0])

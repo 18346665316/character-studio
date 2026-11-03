@@ -11,15 +11,21 @@ SOURCE_CANVAS = (1024,1024)
 SOURCE_ORIGIN = (160,400)
 
 
-def reference():
-    return render('a',LENGTH*5,SOURCE_ORIGIN,SOURCE_CANVAS)
+def source_origin(axis):
+    if axis not in ('a','b'):raise ValueError('Unknown wall axis')
+    return SOURCE_ORIGIN if axis=='a' else (864,400)
 
 
-def prompt(style):
+def reference(axis='a'):
+    return render(axis,LENGTH*5,source_origin(axis),SOURCE_CANVAS)
+
+
+def prompt(style,axis='a'):
     return (
         'Create one intact hand-painted 2D game sprite of the LONG straight courtyard wall in Image 1. '
-        'Paint the reference at exactly its existing position and scale on the unchanged 1024x1024 canvas. '
-        'Orthographic 2:1 projection: the wall runs upper left to lower right at slope +0.5, verticals stay vertical. '
+        'Paint the reference at exactly its existing position and scale on the unchanged 1024x1024 canvas. '+
+        ('Orthographic 2:1 projection: the wall runs upper left to lower right at slope +0.5, verticals stay vertical. ' if axis=='a' else
+         'Orthographic 2:1 projection: the wall runs upper right to lower left at slope -0.5, verticals stay vertical. ')+
         'This is ONE continuous wall FIVE standard spans long. Keep the entire middle uninterrupted: '
         'no pillars, dividing lines, joints, corner turns, gate, windows or breaks along its length. '
         'The two OUTERMOST ends may have normal finished end faces and roof terminations. '
@@ -84,8 +90,8 @@ def board(sprites):
     return image.convert('RGB')
 
 
-def analyze(folder):
-    from asset_repository import read,atomic
+def validated_source(folder):
+    from asset_repository import read
     from wall_assets import whole_cutout
     folder=Path(folder);receipt=read(folder/'generation.json',{}).get('ground',{})
     original=folder/'inputs/ground.png';reference_file=folder/'inputs/reference.png'
@@ -96,12 +102,65 @@ def analyze(folder):
     with Image.open(original) as image:
         if image.size!=SOURCE_CANVAS:raise ValueError('长墙画布与参考不一致，未自动缩放')
         source=whole_cutout(image)
+    return source,digest
+
+
+def analyze(folder):
+    from asset_repository import atomic
+    folder=Path(folder);source,digest=validated_source(folder)
     sprites,expected,report=slice_middle(source)
     report['source_sha256']=digest
     source.save(folder/'source-cutout.png');expected.save(folder/'middle.png')
     for index,sprite in enumerate(sprites):sprite.save(folder/('slice-'+str(index)+'.png'))
     board(sprites).save(folder/'join-board.png');atomic(folder/'slice-checks.json',report)
     return sprites,report
+
+
+def configure_job(folder,spec,axis):
+    source_origin(axis)
+    reference(axis).save(folder/'inputs/reference.png')
+    spec.update(wall_axis=axis,wall_strip_build=True,size=512,asset_type='material',
+                material_prompt=prompt(spec['description'],axis),
+                wall_reference_sha256=hashlib.sha256((folder/'inputs/reference.png').read_bytes()).hexdigest())
+
+
+def build_job(root,folder,spec):
+    """Worker production path: select, gate, slice, then publish one repeat."""
+    from asset_repository import atomic
+    from static_props import _publish_annotation
+    from wall_repeat import select
+    folder=Path(folder);axis=spec['wall_axis'];origin=source_origin(axis)
+    source,digest=validated_source(folder)
+    search=select(source,origin,axis)
+    atomic(folder/'repeat-checks.json',search)
+    if not search['passed']:
+        raise ValueError('长墙未找到符合拼接要求的片段（已检查 %s 组切点）；当前素材保留。'%search['candidate_count'])
+    selected=search['selected']
+    sprites,_,cut=slice_middle(source,origin=origin,start=selected['start'],count=1,length=selected['length'],axis=axis)
+    sprite=sprites[0];sprite.save(folder/'wall-preview.png')
+    stream=BytesIO();sprite.save(stream,'PNG')
+    preview=Image.new('RGBA',(1024,640),'#e1e5dd')
+    step=cut['repeat_offset_px']
+    for index in range(3):
+        x=200 if axis=='a' else 824
+        preview.alpha_composite(sprite,(x+index*step[0]-ANCHOR[0],260+index*step[1]-ANCHOR[1]))
+    preview_stream=BytesIO();preview.convert('RGB').save(preview_stream,'PNG')
+    connectors=dict(schema='studio.wall-connectors/1',axis=axis,start=[0,0],end=cut['repeat_offset_px'],repeat_offset_px=cut['repeat_offset_px'])
+    files={'sprite.png':stream.getvalue(),'cutout.png':stream.getvalue(),
+        'inputs/original.png':(folder/'inputs/ground.png').read_bytes(),
+        'inputs/reference.png':(folder/'inputs/reference.png').read_bytes(),
+        'generation.json':(folder/'generation.json').read_bytes(),
+        'repeat-checks.json':json.dumps(search).encode(),'slice.json':json.dumps(cut).encode(),
+        'repeat-preview.png':preview_stream.getvalue(),
+        'wall-connectors.json':json.dumps(connectors).encode(),
+        'production.json':json.dumps(spec).encode(),'prompt.txt':spec['material_prompt'].encode()}
+    manifest=dict(schema='studio.static-prop/0.1',asset_family='static_prop',asset_kind='custom',view='isometric_2_1',
+        canvas_px=list(CANVAS),image='sprite.png',wall_connectors=connectors,
+        provenance=dict(art_source='ai_long_wall_repeat',this_build='program_selected_unchanged_source_pixels',source_sha256=digest),
+        processing=dict(method='automatic_wall_repeat',recipe=search['recipe'],boundary_checks=selected),
+        limitations=['Boundary checks passed; collision, corners and occlusion are not validated.'])
+    config=dict(title=spec['title'],anchor=list(ANCHOR),world_scale=1,behavior='passable',polygons=[])
+    return _publish_annotation(root,files,manifest,config)
 
 
 def publish_trial(root,folder,scene_id=None):

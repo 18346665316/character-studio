@@ -47,8 +47,10 @@
   const base='/prop-asset/'+encodeURIComponent(kit.id)+'/';
   $('prop-result-title').textContent=label(kit.asset_kind||'rock')+' · '+kit.title;
   $('prop-origin').textContent=(kit.provenance.art_source==='procedural_projection_fixture'?'来源：程序几何验证样本，非AI美术。':kit.provenance.art_source==='ai_complete_object'?'来源：AI生成完整物件，程序抠图与规格化。':'来源：导入完整物件，程序处理。未调用AI。')+(kit.provenance.parent_kit?' 此版本复用原图调整锚点与碰撞，无新增生图。':'');
+  const wallOrigins={ai_long_wall_repeat:'来源：AI一体生成长墙，Studio自动选点、检查并切片。',ai_long_wall_slice:'来源：AI一体生成长墙，程序按截面切片。',ai_whole_wall:'来源：AI一体生成整段墙，程序处理透明背景。',ai_surface_sampling:'来源：AI外观采样，程序投射到固定墙体结构。',ai_line_constrained_wall:'来源：AI参考线框生成整段墙。'};
+  if(wallOrigins[kit.provenance.art_source])$('prop-origin').textContent=wallOrigins[kit.provenance.art_source];
   $('prop-origin').textContent+=' 投影：'+(kit.view==='isometric_2_1'?'等距2:1（角度待人工验收，锚点为占地中心建议）':'斜俯视')+'。';
-  $('prop-preview').src=base+'preview.png';$('prop-overlay').src=base+'anchor_collision.png';
+  $('prop-preview').src=base+(kit.processing?.method==='automatic_wall_repeat'?'repeat-preview.png':'preview.png');$('prop-overlay').src=base+'anchor_collision.png';
   $('prop-sprite').href=base+'sprite.png';$('prop-download').href=base+'kit.zip';
   document.dispatchEvent(new CustomEvent('studio:asset',{detail:kit}));
  }
