@@ -99,6 +99,8 @@ def run(root,character,files,equipment_id=None):
         atomic(project/'equipment.json',config)
         usage=usage_load(assets.root,character,equipment_id);equipment_pin=fingerprint(usage)
         atomic(project/'equipment_usage.json',recipe(usage,hashes))
+    from animation_import import prepare as prepare_animation_import
+    prepare_animation_import(project)
     with (job/'analysis.log').open('w') as log:
         for args in ([GODOT,'--headless','--editor','--path',str(project),'--import'],[GODOT,'--headless','--path',str(project),'--script','res://sample_motion.gd','--',str(job/'probe.json')]):
             subprocess.run(args[:1]+['--log-file',str(job/('probe-engine.log' if '--script' in args else 'import-engine.log'))]+args[1:],stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)

@@ -84,6 +84,8 @@ def review(character, batch, capture_only=False, equipment_editor=None, heading_
                     equipment_screenshot=equipment_editor['screenshot'])
     (project / 'review.json').write_text(json.dumps(spec, ensure_ascii=False, indent=2) + '\n')
     update(character, 'import', '正在导入人物专用检查台', output=str(output), job=str(job), batch=batch)
+    from animation_import import prepare as prepare_animation_import
+    prepare_animation_import(project)
     with (job / 'import.log').open('w') as log:
         subprocess.run([studio.GODOT, '--headless', '--editor', '--path', str(project), '--import',
                         '--log-file', str(job / 'import-engine.log')],

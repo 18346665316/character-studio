@@ -19,10 +19,12 @@ class BakeSelectionTests(unittest.TestCase):
             receipt={'character':'hero','batch':'b1','files':{'idle.fbx':core.digest(source/'idle.fbx'),'unchecked.fbx':'missing'}}
             (source/'batch.json').write_text(json.dumps(receipt))
             (root/'pipeline/godot').mkdir(parents=True)
+            (root/'pipeline/godot/project.godot').write_text('config_version=5\n')
             def stop_after_staging(*args,**kwargs):
                 self.assertEqual([p.name for p in (root/'.local/jobs/test/godot/animations').iterdir()],['idle.fbx'])
                 job=json.loads((root/'.local/jobs/test/job.json').read_text())
                 self.assertEqual(job['source_files'],{'idle.fbx':receipt['files']['idle.fbx']})
+                self.assertEqual(job['animation_import_policy']['optimizer'],False)
                 raise RuntimeError('verified staging')
             with patch.object(core,'BASE_DIR',root),patch.object(core,'progress_update'),patch.object(core,'new_batch',return_value='test'),patch.object(core,'inspect_download',return_value={'textured_surfaces':1,'animations':[{'changing_tracks':1}]}) as inspect,patch.object(core.subprocess,'run',side_effect=stop_after_staging):
                 with self.assertRaisesRegex(RuntimeError,'verified staging'):

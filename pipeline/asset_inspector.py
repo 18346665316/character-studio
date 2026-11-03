@@ -20,6 +20,8 @@ def inspect_download(path):
     shutil.copy2(source, copied)
     result = job / 'inspection.json'
     godot = os.environ.get('GODOT_BIN', '/Applications/Godot.app/Contents/MacOS/Godot')
+    from animation_import import prepare as prepare_animation_import
+    prepare_animation_import(project)
     with (job / 'inspect.log').open('w') as log:
         common = [godot, '--headless', '--path', str(project)]
         subprocess.run(common + ['--editor', '--import', '--log-file', str(job / 'import-engine.log')],

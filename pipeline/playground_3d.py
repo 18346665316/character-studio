@@ -57,6 +57,8 @@ def build(character, batch):
         'triangles':reference['triangles'],'heading':'original source preserved','equipment':equipment,
         'root_motion':'controller owns horizontal travel; authored hip elevation drives physical jumps; rotations preserved',
         'idle':'freeze walk first pose; no dedicated idle clip available'},ensure_ascii=False,indent=2))
+    from animation_import import prepare as prepare_animation_import
+    prepare_animation_import(project)
     subprocess.run([studio.GODOT,'--headless','--editor','--path',str(project),'--import',
                     '--log-file',str(project/'import-engine.log')],check=True,timeout=180)
     print(project,flush=True)

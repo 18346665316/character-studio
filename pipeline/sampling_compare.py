@@ -84,6 +84,8 @@ def compare(job):
         if script.count(expected)!=1:raise ValueError('诊断渲染模板已变化，请更新比较器')
         script=script.replace(expected,f'frame_count = int({json.dumps(counts)}[asset_name])\n    sampling.frame_count = frame_count\n    sampling.columns = mini(frame_count,16)\n    sampling.rows = int(ceil(float(frame_count)/16.0))')
         (project/'baker.gd').write_text(script)
+        from animation_import import prepare as prepare_animation_import
+        prepare_animation_import(project)
         with (directory/'render.log').open('w') as log:
             subprocess.run([GODOT,'--headless','--editor','--path',str(project),'--import','--log-file',str(directory/'import-engine.log')],stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)
             subprocess.run([GODOT,'--path',str(project),'--rendering-method','gl_compatibility','--log-file',str(directory/'render-engine.log'),'--','--output',str(staging),'--view',r['view'],'--frame-size','256'],stdout=log,stderr=subprocess.STDOUT,check=True,timeout=240)

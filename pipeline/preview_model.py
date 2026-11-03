@@ -32,6 +32,8 @@ script = ExtResource("1")
     target = model / 'previews'
     target.mkdir(exist_ok=True)
     godot = os.environ.get('GODOT_BIN', '/Applications/Godot.app/Contents/MacOS/Godot')
+    from animation_import import prepare as prepare_animation_import
+    prepare_animation_import(project)
     with (job / 'preview.log').open('w') as log:
         subprocess.run([godot, '--headless', '--editor', '--import', '--path', str(project),
                         '--log-file', str(job / 'import-engine.log')], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)

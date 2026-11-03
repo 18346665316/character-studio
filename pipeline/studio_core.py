@@ -327,9 +327,12 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         shutil.copy2(source / name, inputs / name)
     staging = job / 'staging'
     staging.mkdir()
+    from animation_import import prepare as prepare_animation_import
+    animation_import_policy = prepare_animation_import(project)
     (job / 'job.json').write_text(json.dumps({
         'character': character, 'batch': batch, 'source_files': files,
-        'renderer': renderer, 'quality_gate': 'textured-moving-visible-v2'
+        'renderer': renderer, 'quality_gate': 'textured-moving-visible-v2',
+        'animation_import_policy': animation_import_policy
     }, indent=2) + '\n')
     print(f'仅烘焙角色 {character} / 批次 {batch}；日志与暂存: {job}', flush=True)
     # Headless is suitable for importing, but dummy rendering cannot capture sprites.
@@ -422,7 +425,8 @@ def bake(character, batch, view="three_quarter", frame_size=128, supersample=1, 
         cameras=[metadata[f'{Path(name).stem}_spritesheet.png'].get('camera') for name in files]
         if not cameras or not cameras[0] or any(camera!=cameras[0] for camera in cameras):
             raise ValueError('编排动作相机参数不一致，拒绝发布统一预览')
-    metadata['source'] = {'character': character, 'batch': batch, 'job': job_id, 'files': files}
+    metadata['source'] = {'character': character, 'batch': batch, 'job': job_id, 'files': files,
+                          'animation_import_policy': animation_import_policy}
     for key in ('action_roles','loop_intent','preset'):
         if key in data: metadata['source'][key]=data[key]
     if data.get('kind')=='sequence': metadata['source']['kind']='sequence'
