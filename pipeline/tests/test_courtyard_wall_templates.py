@@ -3,10 +3,15 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from build_courtyard_wall_templates import LENGTH,THICKNESS,HEIGHT,CAP_RISE,point,project,section
+from build_courtyard_wall_templates import LENGTH,THICKNESS,HEIGHT,CAP_RISE,point,project,section,render,render_continuous
 
 
 class WallInterfaces(unittest.TestCase):
+    def test_continuous_reference_does_not_draw_vertical_end_outlines(self):
+        for axis,x in [('a',248),('b',264)]:
+            self.assertLess(max(render(axis).getpixel((x,230))),100)
+            self.assertGreater(min(render_continuous(axis).getpixel((x,230))),120)
+
     def test_two_axes_have_distinct_two_to_one_slopes(self):
         self.assertEqual(project(point('a',LENGTH,0,0)),(128,64))
         self.assertEqual(project(point('b',LENGTH,0,0)),(-128,64))

@@ -628,8 +628,8 @@ def handler(panel):
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
                 if parsed.path == '/api/props/wall-template':
                     from wall_assets import validate_axis
-                    from build_courtyard_wall_templates import render
-                    stream=BytesIO();render(validate_axis(query.get('axis',[''])[0])).save(stream,'PNG')
+                    from build_courtyard_wall_templates import render_continuous
+                    stream=BytesIO();render_continuous(validate_axis(query.get('axis',[''])[0])).save(stream,'PNG')
                     return self.respond(stream.getvalue(),'image/png')
                 if parsed.path == '/api/props/settings':
                     from static_props import load_package, module_settings

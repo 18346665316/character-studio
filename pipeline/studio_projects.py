@@ -379,7 +379,7 @@ def inherit(root,c,route,data):
         style+='\n视角与朝向约定：'+spatial
     if route=='/api/props/generate' and entry.get('wall_axis'):
         if b['view']!='isometric_2_1':raise ValueError('院墙模板需要2:1等距视角')
-        data.update(wall_axis=entry['wall_axis'],wall_surface_projection=False,wall_whole_sprite=True,mode='ai',kind='custom')
+        data.update(wall_axis=entry['wall_axis'],wall_continuous=True,wall_surface_projection=False,wall_whole_sprite=True,mode='ai',kind='custom')
         data.pop('wall_material_job',None)
         data.pop('wall_style_job',None)
         for prior in reversed(task_state(root,p)):

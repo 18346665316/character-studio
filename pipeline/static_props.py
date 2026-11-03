@@ -117,6 +117,7 @@ def prepare(root,data):
     spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind'],spec['projection']) if spec['mode']=='ai' else '')
     if data.get('wall_axis'):
         from wall_assets import configure
+        spec['wall_continuous']=bool(data.get('wall_continuous'))
         configure(folder,spec,data['wall_axis'])
         spec['wall_surface_projection']=bool(data.get('wall_surface_projection'))
         if data.get('wall_whole_sprite'):

@@ -99,6 +99,29 @@ class WallAssets(unittest.TestCase):
         self.assertEqual(props.module_settings(manifest)['polygons'],[])
         self.assertEqual(manifest['provenance']['art_source'],'ai_whole_wall')
 
+    def test_continuous_wall_keeps_the_generated_pixels_and_open_reference(self):
+        import numpy as np
+        from build_courtyard_wall_templates import render_continuous
+        with patch('static_props.configured',return_value=True):
+            job=props.prepare(self.root,dict(mode='ai',kind='custom',title='连续墙',description='painted wall',projection='isometric_2_1',wall_axis='a',wall_whole_sprite=True,wall_continuous=True))
+        folder=self.root/'.local/props/jobs'/job['id']
+        self.assertTrue(np.array_equal(np.asarray(Image.open(folder/'inputs/reference.png')),np.asarray(render_continuous('a'))))
+        self.assertIn('invisible cut planes',job['spec']['material_prompt'])
+        source=Image.new('RGBA',(512,512),(255,0,255,255))
+        source.paste(Image.new('RGBA',(512,512),(170,160,140,255)),(0,0),walls.mask('a',True))
+        source.save(folder/'inputs/original.png')
+        expected,_=walls.process(walls.whole_cutout(source),'a',True)
+        with patch('wall_assets.compile_surfaces',side_effect=AssertionError('no geometry processing')):
+            manifest=walls.publish(self.root,folder,job['spec'])
+        self.assertTrue(np.array_equal(np.asarray(Image.open(self.root/'prop-kits'/manifest['id']/'sprite.png')),np.asarray(expected)))
+
+    def test_continuous_wall_rejects_wrong_geometry_instead_of_publishing_a_preview(self):
+        job,folder=self.prepare();job['spec']['wall_continuous']=True
+        walls.configure(folder,job['spec'],'a');walls.whole_sprite(folder,job['spec'],self.root)
+        fixture('b').save(folder/'inputs/original.png')
+        with self.assertRaisesRegex(ValueError,'偏离线框'):walls.publish(self.root,folder,job['spec'])
+        self.assertFalse(list((self.root/'prop-kits').glob('*')))
+
     def test_style_reference_has_receipt_and_is_not_reused_as_output(self):
         import hashlib
         job,folder=self.prepare()
@@ -128,6 +151,7 @@ class WallAssets(unittest.TestCase):
         self.assertEqual(result.getchannel('A').getbbox(),(180,180,320,340))
         self.assertEqual(result.getpixel((250,250)),(238,227,198,255))
         with self.assertRaises(ValueError):walls.whole_cutout(Image.new('RGB',(512,512),'green'))
+        with self.assertRaisesRegex(ValueError,'品红背景'):walls.whole_cutout(Image.new('RGB',(512,512),'white'))
 
     def test_surface_projection_uses_shared_material_and_exact_geometry(self):
         import numpy as np
@@ -171,6 +195,7 @@ class WallAssets(unittest.TestCase):
             shared=projects.production_plan(self.root,p,p['items'][0])
         self.assertEqual(shared['data']['wall_style_job'],'shared')
         self.assertTrue(shared['data']['wall_whole_sprite'])
+        self.assertTrue(shared['data']['wall_continuous'])
         self.assertFalse(shared['data']['wall_surface_projection'])
         direct=dict(mode='import',description='wall',wall_material_job='unrelated')
         projects.inherit(self.root,shared['context'],'/api/props/generate',direct)

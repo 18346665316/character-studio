@@ -45,6 +45,23 @@ def render(axis, length=LENGTH, origin=ANCHOR, canvas=CANVAS):
     return image.resize(canvas,Image.Resampling.LANCZOS)
 
 
+def render_continuous(axis, length=LENGTH, origin=ANCHOR, canvas=CANVAS):
+    """Open repeat boundaries: no end face or cross-section outline to copy."""
+    if axis not in ('a','b'):raise ValueError('Unknown wall axis')
+    factor=3
+    image=Image.new('RGB',(canvas[0]*factor,canvas[1]*factor),'white')
+    draw=ImageDraw.Draw(image)
+    def pixel(v):
+        x,y=project(v)
+        return ((x+origin[0])*factor,(y+origin[1])*factor)
+    for face,color in zip(faces(axis,length)[:3],('#e7e0cf','#adb9bd','#c3ced0')):
+        draw.polygon([pixel(v) for v in face],fill=color)
+    start,end=section(axis,0),section(axis,length)
+    for index in (1,2,3,4):
+        draw.line([pixel(start[index]),pixel(end[index])],fill='#354440',width=factor)
+    return image.resize(canvas,Image.Resampling.LANCZOS)
+
+
 def build(output):
     output=Path(output);output.mkdir(parents=True,exist_ok=True)
     spec=dict(schema='studio.wall-line-master/1',projection='orthographic_2_1',
@@ -52,6 +69,7 @@ def build(output):
               canvas_px=list(CANVAS),anchor_px=list(ANCHOR),modules={})
     for axis in ('a','b'):
         render(axis).save(output/('wall-'+axis+'-outline.png'))
+        render_continuous(axis).save(output/('wall-'+axis+'-continuous.png'))
         start,end=section(axis,0),section(axis,LENGTH)
         delta=project(point(axis,LENGTH,0,0))
         # Compare every interface vertex in 3D and in image coordinates,

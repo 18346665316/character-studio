@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 from asset_repository import atomic
-from build_courtyard_wall_templates import CANVAS, ANCHOR, LENGTH, faces, point, project, render
+from build_courtyard_wall_templates import CANVAS, ANCHOR, LENGTH, faces, point, project, render, render_continuous
 
 
 def validate_axis(axis):
@@ -14,10 +14,10 @@ def validate_axis(axis):
     return axis
 
 
-def mask(axis):
+def mask(axis,continuous=False):
     validate_axis(axis)
     image=Image.new('L',CANVAS);draw=ImageDraw.Draw(image)
-    for face in faces(axis,LENGTH):
+    for face in (faces(axis,LENGTH)[:3] if continuous else faces(axis,LENGTH)):
         draw.polygon([(x+ANCHOR[0],y+ANCHOR[1]) for x,y in map(project,face)],fill=255)
     return image
 
@@ -45,7 +45,8 @@ def prompt(axis,style):
 
 def configure(folder,spec,axis):
     axis=validate_axis(axis)
-    render(axis).save(folder/'inputs/reference.png')
+    renderer=render_continuous if spec.get('wall_continuous') else render
+    renderer(axis).save(folder/'inputs/reference.png')
     spec.update(wall_axis=axis,size=512,material_prompt=prompt(axis,spec['description']))
     spec['wall_reference_sha256']=hashlib.sha256((folder/'inputs/reference.png').read_bytes()).hexdigest()
 
@@ -54,6 +55,20 @@ def whole_sprite(folder,spec,root,style_job=None):
     """Generate intact artwork; a second reference carries appearance only."""
     spec.update(wall_whole_sprite=True,wall_surface_projection=False)
     spec['material_prompt']+=' Render the ENTIRE wall as ONE cohesive hand-painted illustration. Preserve artistic outlines, curved ceramic tiles, ridge tiles, eave detailing and soft local shadows where the cap meets plaster. These are part of the artwork. No texture atlas, separate material swatches, flat polygon rendering or independently assembled surfaces. Fine warm ivory lime plaster, restrained natural texture, blue-grey fired clay tiles. Clean readable game-art shapes, delicate painted edges, no random scratch marks. '
+    if spec.get('wall_continuous'):
+        spec['material_prompt']=(
+            'Paint Image 1 as an intact hand-painted 2D game sprite. This is a repeating MIDDLE slice of a continuous wall, not a freestanding wall. '
+            'GEOMETRY: paint exactly the colored 2D panels in Image 1 at their existing positions and sizes on the unchanged square canvas. '
+            'Do not extrude or redesign the panels. There are only a plaster plane, narrow eave, and tiled roof plane. There is NO end face. '
+            'The two vertical boundaries are invisible cut planes through a continuing surface. They are alpha-cut edges WITHOUT ink strokes, border lines, bevels, thickness, shading or exposed cross-sections. '
+            'Do not draw a vertical line at either cut. Do not add terminal tiles, ridge-end ornaments, pillars or roof overhang at the cuts. '
+            'LONGITUDINAL REPEAT: the whole sprite will be copied by exactly '+str(list(project(point(spec['wall_axis'],LENGTH,0,0))))+' pixels on a 512-pixel canvas. '
+            'Walls and roof must continue smoothly under this translation: same plaster color at both cuts, level continuing ridge/eave/baseline, eight identical ceramic tile repeats at matching phase. '
+            'ART: cohesive painted warm ivory lime plaster, blue-grey curved clay tiles, restrained plaster grain, soft narrow shade directly under the eave, delicate dark ink only on tile details and the continuous longitudinal roof edges. '
+            'Preserve the rich integrated illustration; no flat polygon rendering or separate material swatches. '
+            'BACKGROUND: pure solid #FF00FF outside the exact colored panels, no ground plane, drop shadow, gradients, extra objects, lettering or labels. '
+            'The reference omits end faces and vertical border strokes deliberately; keep them absent. Shared art direction: '+spec['description'])
+
     if style_job:
         from asset_repository import AssetRepository,name,read
         source=AssetRepository(root).scoped('.local/props/jobs/'+name(style_job),'.local/props/jobs')
@@ -89,14 +104,14 @@ def verify_reference(folder,spec):
         raise ValueError('院墙风格参考已变化，请重新创建制作任务')
 
 
-def process(original,axis):
+def process(original,axis,continuous=False):
     from static_props import cutout
     validate_axis(axis)
     if original.width!=original.height:raise ValueError('院墙输出必须为正方形，不能通过裁切修正')
     sprite,background=cutout(original,adaptive_magenta=True,reserved_magenta=True)
     # Normalize the full canvas using its known scale. Never bbox-fit or recenter.
     sprite=sprite.resize(CANVAS,Image.Resampling.LANCZOS)
-    expected=np.asarray(mask(axis))>0
+    expected=np.asarray(mask(axis,continuous))>0
     visible=np.asarray(sprite.getchannel('A'))>127
     union=int((expected|visible).sum());intersection=int((expected&visible).sum())
     iou=intersection/max(1,union)
@@ -129,6 +144,9 @@ def whole_cutout(original):
     if np.asarray(rgba.getchannel('A')).min()<255:return rgba
     pixels=np.asarray(rgba).copy();rgb=pixels[:,:,:3].astype(int)
     background=(rgb[:,:,0]-rgb[:,:,1]>35)&(rgb[:,:,2]-rgb[:,:,1]>15)
+    if min(rgba.size)<=20:raise ValueError('一体墙体画布过小')
+    inner=np.concatenate([background[8,8:-8],background[-9,8:-8],background[8:-8,8],background[8:-8,-9]])
+    if inner.mean()<.98:raise ValueError('一体墙体未使用预留品红背景，未自动清除')
     # Providers sometimes add a narrow white canvas rim. It is background only
     # in this explicit border band; ivory plaster inside is never selected.
     border=np.zeros(background.shape,dtype=bool)
@@ -239,7 +257,7 @@ def publish(root,folder,spec):
     verify_reference(folder,spec)
     axis=spec['wall_axis']
     with Image.open(folder/'inputs/original.png') as original:
-        sprite,report=process(whole_cutout(original) if spec.get('wall_whole_sprite') else original.convert('RGBA'),axis)
+        sprite,report=process(whole_cutout(original) if spec.get('wall_whole_sprite') else original.convert('RGBA'),axis,spec.get('wall_continuous',False))
         if spec.get('wall_surface_projection'):
             textures=material_textures(original)
             sprite=compile_surfaces(textures,axis)
@@ -248,7 +266,7 @@ def publish(root,folder,spec):
             for role,texture in textures.items():texture.save(folder/('wall-'+role+'-material.png'))
     sprite.save(folder/'wall-preview.png');atomic(folder/'wall-checks.json',report)
     whole=spec.get('wall_whole_sprite',False)
-    if not report['geometry_passed'] and not whole:
+    if not report['geometry_passed'] and (not whole or spec.get('wall_continuous')):
         raise ValueError('院墙外观偏离线框：轮廓重合 %.1f%%，端面偏差 %s；未发布，不会改动当前素材。' %
                          (report['iou']*100,report['endpoint_errors']))
     delta=list(project(point(axis,LENGTH,0,0)))
