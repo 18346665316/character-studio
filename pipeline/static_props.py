@@ -115,6 +115,10 @@ def prepare(root,data):
     if image is not None: image.save(folder/'inputs/original.png')
     if reference is not None: reference.save(folder/'inputs/reference.png')
     spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind'],spec['projection']) if spec['mode']=='ai' else '')
+    if data.get('courtyard_ring_build'):
+        if spec['mode']!='ai' or spec['projection']!='isometric_2_1':raise ValueError('四合院院墙需要 AI 模式及2:1等距投影')
+        from courtyard_ring import configure_job
+        configure_job(folder,spec)
     if data.get('wall_corner_build'):
         if spec['mode']!='ai' or spec['projection']!='isometric_2_1':raise ValueError('转角墙需要 AI 模式及2:1等距投影')
         from wall_corner import configure_job
@@ -497,7 +501,7 @@ def execute(root,job_id):
             target=Path(root)/'prop-kits'/published
             if target.exists(): load_package(root,published)
             else:
-                if job['spec'].get('wall_axis') or job['spec'].get('wall_corner_build'):
+                if job['spec'].get('wall_axis') or job['spec'].get('wall_corner_build') or job['spec'].get('courtyard_ring_build'):
                     from wall_assets import verify_reference
                     verify_reference(folder,job['spec'])
                 progress('准备物件原图')
@@ -510,7 +514,12 @@ def execute(root,job_id):
                         progress('复用已生成的完整物件原图')
                     shutil.copyfile(generated,folder/'inputs/original.png')
                 progress('透明背景处理与素材导出')
-                if job['spec'].get('wall_corner_build'):
+                if job['spec'].get('courtyard_ring_build'):
+                    progress('检查院墙闭合并切分四角与四边')
+                    from courtyard_ring import build_job
+                    manifest=build_job(root,folder,job['spec'])
+                    job['kit_id']=manifest['id']
+                elif job['spec'].get('wall_corner_build'):
                     progress('切分转角与两轴直墙并验证接口')
                     from wall_corner import build_job
                     manifest=build_job(root,folder,job['spec'])

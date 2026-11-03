@@ -289,10 +289,14 @@ def change(root,data):
         if entry['kind']!='prop':raise ValueError('院墙模板需绑定物件需求')
         from wall_assets import validate_axis
         if p['baseline']['view']!='isometric_2_1':raise ValueError('院墙模板需要2:1等距视角')
-        if data.get('axis')=='corner':
+        if data.get('axis')=='ring':
+            entry['courtyard_ring_build']=True;entry.pop('wall_axis',None);entry.pop('wall_corner_build',None)
+        elif data.get('axis')=='corner':
             entry['wall_corner_build']=True;entry.pop('wall_axis',None)
+            entry.pop('courtyard_ring_build',None)
         else:
             entry['wall_axis']=validate_axis(data.get('axis'));entry.pop('wall_corner_build',None)
+            entry.pop('courtyard_ring_build',None)
     elif action=='set_asset':
         entry=item(p,data.get('item'));family=KINDS[entry['kind']][2];aid=name(data.get('asset'))
         if not any(a['family']==family and a['id']==aid and a['kind']==entry['kind'] for a in available(root)):
@@ -391,6 +395,11 @@ def inherit(root,c,route,data):
         data.update(wall_corner_build=True,mode='ai',kind='custom')
         for key in ('wall_axis','wall_strip_build','wall_material_job','wall_style_job','wall_continuous','wall_whole_sprite','wall_surface_projection'):
             data.pop(key,None)
+    if route=='/api/props/generate' and entry.get('courtyard_ring_build'):
+        if b['view']!='isometric_2_1':raise ValueError('四合院院墙需要2:1等距视角')
+        data.update(courtyard_ring_build=True,mode='ai',kind='custom')
+        for key in ('wall_axis','wall_strip_build','wall_corner_build','wall_material_job','wall_style_job','wall_continuous','wall_whole_sprite','wall_surface_projection'):
+            data.pop(key,None)
     c['request_snapshot']={k:data.get(k) for k in ('title','description','appearance','projection','mode')}
     if route=='/api/buildings/prepare':
         if not b['style']: raise ValueError('请先在素材项目设置共同风格')
@@ -451,7 +460,8 @@ def production_plan(root,p,entry):
         from terrain_images import configured
         if not configured(root): raise ValueError('请先配置图片服务')
         return dict(ready=True,route=route,data=data,context=c,
-                    note='一体生成L形长墙，自动切出同源转角与两轴直墙；当前仅验证一种转角朝向' if entry.get('wall_corner_build') else
+                    note='生成完整闭合院墙，程序检查院心及闭合并切分四角四边；本轮固定尺寸验证' if entry.get('courtyard_ring_build') else
+                         '一体生成L形长墙，自动切出同源转角与两轴直墙；当前仅验证一种转角朝向' if entry.get('wall_corner_build') else
                          '生成长墙后自动选择切点、验证并切片；合格后显示当前素材' if entry.get('wall_axis') else
                          '默认256px、自定义物件、无碰撞；可到工作台调整' if kind=='prop' else
                          '默认道路宽度50%、自然边缘' if kind=='road' else '使用项目基准与清单需求')
