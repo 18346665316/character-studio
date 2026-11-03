@@ -460,7 +460,7 @@ def production_plan(root,p,entry):
         from terrain_images import configured
         if not configured(root): raise ValueError('请先配置图片服务')
         return dict(ready=True,route=route,data=data,context=c,
-                    note='生成完整闭合院墙，程序检查院心及闭合并切分四角四边；本轮固定尺寸验证' if entry.get('courtyard_ring_build') else
+                    note='生成院墙并寻找相对墙共同重复切口；四角固定，验证加长、加宽和双向扩建' if entry.get('courtyard_ring_build') else
                          '一体生成L形长墙，自动切出同源转角与两轴直墙；当前仅验证一种转角朝向' if entry.get('wall_corner_build') else
                          '生成长墙后自动选择切点、验证并切片；合格后显示当前素材' if entry.get('wall_axis') else
                          '默认256px、自定义物件、无碰撞；可到工作台调整' if kind=='prop' else

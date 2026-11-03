@@ -51,7 +51,7 @@ class CourtyardRingTests(unittest.TestCase):
                 self.assertEqual(read(folder/'job.json')['kit_id'],done['kit_id'])
             import scene_modules as scenes
             scene=create_validation_scene(root,folder)
-            self.assertEqual(len(scene['modules']),8);self.assertEqual(len(scene['instances']),8)
+            self.assertEqual(len(scene['modules']),8);self.assertEqual(len(scene['instances']),24)
             self.assertEqual({m['source']['id'] for m in scene['modules']},set(manifest['assembly_parts']))
             # Returning to validation must not undo the user's scene edits.
             edited=scenes.change(root,dict(action='layout',scene=scene['id'],revision=scene['revision'],instances=scene['instances'][:-1],spawn=[0,192]))

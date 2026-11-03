@@ -119,6 +119,9 @@ def prepare(root,data):
         if spec['mode']!='ai' or spec['projection']!='isometric_2_1':raise ValueError('四合院院墙需要 AI 模式及2:1等距投影')
         from courtyard_ring import configure_job
         configure_job(folder,spec)
+        if data.get('courtyard_source_job'):
+            from courtyard_ring import reuse_source
+            reuse_source(root,folder,spec,data['courtyard_source_job'])
     if data.get('wall_corner_build'):
         if spec['mode']!='ai' or spec['projection']!='isometric_2_1':raise ValueError('转角墙需要 AI 模式及2:1等距投影')
         from wall_corner import configure_job
@@ -515,7 +518,7 @@ def execute(root,job_id):
                     shutil.copyfile(generated,folder/'inputs/original.png')
                 progress('透明背景处理与素材导出')
                 if job['spec'].get('courtyard_ring_build'):
-                    progress('检查院墙闭合并切分四角与四边')
+                    progress('寻找相对墙共同切口并验证单轴及双轴扩建')
                     from courtyard_ring import build_job
                     manifest=build_job(root,folder,job['spec'])
                     job['kit_id']=manifest['id']

@@ -75,7 +75,7 @@ def partition(source):
         parts=[{k:v for k,v in part.items() if k!='sprite'} for part in parts])
 
 
-def build_job(root,folder,spec):
+def build_fixed_job(root,folder,spec):
     from static_props import _publish_annotation,load_package
     folder=Path(folder);source,digest=validated_source(folder)
     parts,checks=partition(source);atomic(folder/'ring-checks.json',checks)
@@ -105,11 +105,33 @@ def build_job(root,folder,spec):
     return load_package(root,published['8'])
 
 
+def build_job(root,folder,spec):
+    from courtyard_expand import build_job as expand
+    return expand(root,folder,spec)
+
+
+def reuse_source(root,folder,spec,identity):
+    """Explicitly reprocess a verified Studio ring source without another AI call."""
+    import shutil
+    from asset_repository import AssetRepository,name
+    old=AssetRepository(root).scoped('.local/props/jobs/'+name(identity),'.local/props/jobs')
+    prior=read(old/'job.json',{}).get('spec',{})
+    if not prior.get('courtyard_ring_build'):raise ValueError('只能复用 Studio 院墙来源任务')
+    validated_source(old)
+    if (folder/'inputs/reference.png').read_bytes()!=(old/'inputs/reference.png').read_bytes():raise ValueError('院墙参考已变化，不能复用旧图')
+    shutil.copyfile(old/'inputs/ground.png',folder/'inputs/ground.png')
+    shutil.copyfile(old/'generation.json',folder/'generation.json')
+    spec['courtyard_source_job']=identity
+
+
 def create_validation_scene(root,folder):
     """Explicit validation action; reuse the saved scene without overwriting edits."""
     import scene_modules as scenes
     from task_lock import task_lock
     folder=Path(folder)
+    if (folder/'expansion-published.json').is_file():
+        from courtyard_expand import create_scenes
+        return create_scenes(root,folder)[3]
     with task_lock(root):
         receipt=read(folder/'ring-scene.json',{})
         if receipt:return scenes.load(root,receipt['scene'])
