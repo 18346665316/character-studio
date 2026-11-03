@@ -74,7 +74,8 @@ def source_config(manifest,source):
                 'character_id':manifest['character']}
     from static_props import module_settings
     return dict(module_settings(manifest),layer='objects',
-                **({'wall_connectors':manifest['wall_connectors']} if manifest.get('wall_connectors') else {}))
+                **({'wall_connectors':manifest['wall_connectors']} if manifest.get('wall_connectors') else {}),
+                **({'corner_ports':manifest['corner_ports']} if manifest.get('corner_ports') else {}))
 
 
 def source_package(root, source):

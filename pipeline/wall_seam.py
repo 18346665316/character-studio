@@ -6,13 +6,14 @@ RECIPE='studio.wall-path/1'
 LIMITS=dict(roof_mae=18.,wall_mae=10.,outline_shift=1.,alpha_mismatch=.015)
 
 
-def select(source,origin,axis='a'):
+def select(source,origin,axis='a',stop=512):
     if axis not in ('a','b'):raise ValueError('Unknown wall axis')
     rgba=np.asarray(source.convert('RGBA')).astype(float)
     ks=np.arange(-240,121);sign=1 if axis=='a' else -1
     candidates=[]
     for length in range(96,193,2):
-        ts=np.arange(128,513-length,2)
+        ts=np.arange(128,stop+1-length,2)
+        if not len(ts):continue
         xx=np.broadcast_to(ts,(len(ks),len(ts)))
         costs=[];masks=[];differences=[]
         for offset in (-1,0,1):
