@@ -206,6 +206,47 @@ class ModuleSceneTests(unittest.TestCase):
 
 
 class ModuleSceneBrowserTests(ModuleSceneTests):
+    def test_tiled_scene_and_material_selection_preserves_layout(self):
+        from playwright.sync_api import sync_playwright,expect
+        module=self.imported()
+        first=self.scene['id']
+        second=sm.change(self.root,dict(action='create',title='第二个验证场景'))
+        state=sm.state(self.root)
+        summary=next(s for s in state['scenes'] if s['id']==first)
+        self.assertEqual(summary['images'],[module['image']])
+        self.assertEqual(summary['material_count'],1)
+        panel=Panel(self.root);server=ThreadingHTTPServer(('127.0.0.1',0),handler(panel))
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page(viewport=dict(width=1440,height=1000));errors=[]
+                page.on('pageerror',lambda e:errors.append(str(e)))
+                page.goto('http://127.0.0.1:'+str(server.server_port)+'/module-scenes.html')
+                expect(page.locator('#scene-cards .scene-card')).to_have_count(2)
+                expect(page.locator('#scenes, #modules, #tool')).to_have_count(0)
+                expect(page.locator('#save-layout')).to_be_disabled()
+                first_card=page.locator('[data-scene="'+first+'"]')
+                expect(first_card.locator('img')).to_be_visible()
+                first_card.focus();first_card.press('Enter')
+                expect(first_card).to_have_attribute('aria-pressed','true')
+                material=page.locator('#asset-cards .asset-card')
+                expect(material.locator('img')).to_be_visible()
+                material.click()
+                expect(material).to_have_attribute('aria-pressed','true')
+                page.locator('#scene-canvas').click(position=dict(x=200,y=180))
+                page.locator('[data-scene="'+second['id']+'"]').click()
+                expect(page.locator('[data-scene="'+second['id']+'"]')).to_have_attribute('aria-pressed','true')
+                self.assertEqual(len(sm.load(self.root,first)['instances']),1)
+                expect(page.locator('#asset-cards .asset-card')).to_have_count(0)
+                page.locator('[data-scene="'+first+'"]').click()
+                expect(page.locator('#layout-summary')).to_contain_text('1 个实例')
+                page.set_viewport_size(dict(width=390,height=844))
+                self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),392)
+                self.assertEqual(errors,[])
+            finally:browser.close()
+
     def test_browser_import_edit_place_save_reopen_export(self):
         from playwright.sync_api import sync_playwright
         panel=Panel(self.root);server=ThreadingHTTPServer(('127.0.0.1',0),handler(panel))
@@ -222,7 +263,7 @@ class ModuleSceneBrowserTests(ModuleSceneTests):
             page.fill('#module-title','浏览器导入')
             page.set_input_files('#image-file',dict(name='module.png',mimeType='image/png',buffer=png()))
             page.locator('#import-form button').last.click()
-            page.wait_for_function('() => document.querySelector("#modules").options.length === 1')
+            page.wait_for_function('() => document.querySelector("#asset-cards").children.length === 1')
             page.click('#view-annotation')
             page.fill('#anchor-y','100');page.locator('#anchor-y').blur()
             page.fill('#world-width','64');page.locator('#world-width').blur()

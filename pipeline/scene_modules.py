@@ -39,7 +39,9 @@ def load(root, identity):
 
 
 def state(root, identity=None):
-    scenes = [dict(id=s['id'], title=s['title'], revision=s['revision'])
+    scenes = [dict(id=s['id'], title=s['title'], revision=s['revision'],
+                   images=list(dict.fromkeys(m['image'] for m in s.get('modules', [])))[:4],
+                   material_count=len(s.get('modules', [])),instance_count=len(s.get('instances', [])))
               for p in sorted(directory(root).glob('*.json')) if (s := read(p))]
     return dict(scenes=scenes, selected=load(root, identity) if identity else None)
 
