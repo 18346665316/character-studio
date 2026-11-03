@@ -131,12 +131,25 @@ def build_job(root,folder,spec):
     from wall_repeat import select
     folder=Path(folder);axis=spec['wall_axis'];origin=source_origin(axis)
     source,digest=validated_source(folder)
-    search=select(source,origin,axis)
+    try:
+        search=select(source,origin,axis)
+    except ValueError as error:
+        search=dict(passed=False,error=str(error))
+    if not search['passed']:
+        from wall_seam import select as select_path
+        straight=search
+        search=select_path(source,origin,axis)
+        search['straight_cut_result']=straight
     atomic(folder/'repeat-checks.json',search)
     if not search['passed']:
-        raise ValueError('长墙未找到符合拼接要求的片段（已检查 %s 组切点）；当前素材保留。'%search['candidate_count'])
+        c=search['selected']
+        raise ValueError('长墙切割后边界差异仍过大（瓦顶 %.1f/18，墙面 %.1f/10，轮廓 %.0f/1px）；当前素材保留。'%(c['roof_mae'],c['wall_mae'],c['outline_shift']))
     selected=search['selected']
-    sprites,_,cut=slice_middle(source,origin=origin,start=selected['start'],count=1,length=selected['length'],axis=axis)
+    if search['recipe']=='studio.wall-path/1':
+        from wall_seam import cut as cut_path
+        sprites,_,cut=cut_path(source,origin,axis,search)
+    else:
+        sprites,_,cut=slice_middle(source,origin=origin,start=selected['start'],count=1,length=selected['length'],axis=axis)
     sprite=sprites[0];sprite.save(folder/'wall-preview.png')
     stream=BytesIO();sprite.save(stream,'PNG')
     preview=Image.new('RGBA',(1024,640),'#e1e5dd')

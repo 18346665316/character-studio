@@ -57,7 +57,7 @@ class WallBuildBrowser(unittest.TestCase):
                     page.get_by_role('button',name='重新生成',exact=True).click()
                     expect(page.get_by_role('button',name='重新生成',exact=True)).to_be_enabled(timeout=10000)
                     page.get_by_role('button',name='详情',exact=True).click()
-                    expect(page.get_by_text('长墙未找到符合拼接要求的片段',exact=False)).to_be_visible(timeout=10000)
+                    expect(page.get_by_text('长墙切割后边界差异仍过大',exact=False)).to_be_visible(timeout=10000)
                     latest=projects.load(root,p['id'])
                     self.assertEqual(projects.current_assets(root,latest)[entry]['id'],current)
                     self.assertEqual(projects.task_state(root,latest)[-1]['status'],'failed')

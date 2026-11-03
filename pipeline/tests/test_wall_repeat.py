@@ -101,3 +101,20 @@ class WallRepeatTests(unittest.TestCase):
                 self.assertFalse(list((root/'prop-kits').glob('*')))
                 props.execute(root,job['id']);provider.assert_called_once()
                 self.assertEqual(read(folder/'job.json')['status'],'failed')
+
+    def test_worker_publishes_path_cut_when_straight_cut_fails(self):
+        from wall_seam import cut
+        from wall_assets import whole_cutout
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch('static_props.configured',return_value=True):
+                job=props.prepare(root,dict(mode='ai',kind='custom',description='wall',title='墙',projection='isometric_2_1',wall_axis='b',wall_strip_build=True))
+            folder=root/'.local/props/jobs'/job['id'];source=art('b')
+            with patch('static_props.generate_materials',side_effect=lambda f,s,p:provider_result(f,s,p,source)),patch('wall_repeat.select',return_value=dict(passed=False)):
+                props.execute(root,job['id'])
+            done=read(folder/'job.json');self.assertEqual(done['status'],'complete',done)
+            search=read(folder/'repeat-checks.json')
+            self.assertEqual(search['recipe'],'studio.wall-path/1')
+            expected,_,_=cut(whole_cutout(source),source_origin('b'),'b',search)
+            with Image.open(root/'prop-kits'/done['kit_id']/'sprite.png') as actual:
+                self.assertTrue(np.array_equal(np.asarray(expected[0]),np.asarray(actual)))
