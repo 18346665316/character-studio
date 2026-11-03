@@ -154,7 +154,8 @@ class ProjectTests(unittest.TestCase):
         with patch('terrain_images.configured',return_value=True):
             plan=projects.production_plan(self.root,self.project,self.project['items'][-1])
         self.assertTrue(plan['ready']);self.assertEqual(plan['data']['template_id'],template['id'])
-        self.assertEqual(plan['data']['appearance'],'乡村像素。柔和中性光，统一左上方受光')
+        self.assertIn('乡村像素。柔和中性光，统一左上方受光',plan['data']['appearance'])
+        self.assertIn(self.project['items'][-1]['description'],plan['data']['appearance'])
 
     def test_batch_import_preserves_existing_and_is_atomic(self):
         self.select();before=self.project['items'][0].copy()

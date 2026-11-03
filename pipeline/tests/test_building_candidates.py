@@ -87,13 +87,13 @@ class BuildingCandidatesTests(unittest.TestCase):
         raw=Image.new('RGB',(256,256),'#cd5692')
         pen=ImageDraw.Draw(raw)
         pen.rectangle((60,60,195,195),fill='#92744b')
-        pen.rectangle((100,100,140,140),fill='#cd5692')
+        pen.rectangle((100,100,140,140),fill='#836446')
         self.provider.create.return_value={'data':[{'b64_json':encoded(raw)}]}
         target=self.generate()
         self.assertEqual(self.job['status'],'waiting_review')
         with Image.open(target/'sprite.png') as sprite:
             self.assertEqual(sprite.getpixel((20,20))[3],0)
-            self.assertEqual(sprite.getpixel((120,120)),(205,86,146,255))
+            self.assertEqual(sprite.getpixel((120,120)),(131,100,70,255))
         self.assertEqual(read(target/'checks.json')['background']['key_rgb'],[205,86,146])
 
     def test_nonuniform_pink_scene_is_not_accepted_as_chroma_key(self):
@@ -124,6 +124,23 @@ class BuildingCandidatesTests(unittest.TestCase):
         self.select(first.name);kit=self.save(first.name)
         self.assertEqual(kit['attempt_id'],first.name)
         self.assertTrue((second/'raw.png').exists());self.assertEqual(self.provider.create.call_count,2)
+
+    def test_enclosed_pink_background_is_removed_before_visual_adoption(self):
+        raw = self.raw.copy()
+        ImageDraw.Draw(raw).rectangle((110, 110, 140, 150), fill='#cc70ad')
+        self.provider.create.return_value = {'data': [{'b64_json': encoded(raw)}]}
+        target = self.generate()
+        self.assertEqual(self.job['status'], 'waiting_review')
+        with Image.open(target/'sprite.png') as sprite:
+            self.assertEqual(sprite.getpixel((125, 130))[3], 0)
+            self.assertGreater(sprite.getpixel((85, 130))[3], 240)
+        report = read(target/'checks.json')
+        self.assertGreater(report['background']['enclosed_or_deep_spill_px'], 0)
+        result = candidates.save(self.root, dict(task=self.task, revision=self.job['revision'],
+            attempt=target.name, evidence_key=bp.digest(target/'checks.json'), visual_only=True))
+        bp.load_package(self.root, result['id'])
+        with Image.open(self.root/'building-kits'/result['id']/'inputs/sprite.png') as sprite:
+            self.assertEqual(sprite.getpixel((125, 130))[3], 0)
 
     def test_save_maps_calibration_uniformly_and_preserves_sources(self):
         target=self.generate()

@@ -66,6 +66,7 @@ def prompt(style):
             'ground contact shadows or projected shadows. Use soft neutral lighting on the building itself; '
             'surface shading stays within its silhouette. The magenta is a background key only, '
             'not an environment: no magenta color spill, bounce light or reflections on the building. '
+            'No pink or magenta building materials; these colors are reserved for background removal, including enclosed openings. '
             'No diagram lines, text, labels, watermark or collage. '
             'Apply the following architectural art style (materials, palette and rendering): '+style)
 
@@ -100,7 +101,8 @@ def evidence(folder, target):
 
 
 def process(folder, target):
-    with Image.open(target/'raw.png') as image: sprite, method = cutout(image, adaptive_magenta=True)
+    with Image.open(target/'raw.png') as image:
+        sprite, method = cutout(image, adaptive_magenta=True, reserved_magenta=True)
     connectivity = single_object(sprite)
     # Keep the provider's full canvas. Candidate comparison never bbox-fits each image.
     sprite.save(target/'sprite.png'); width, height = sprite.size

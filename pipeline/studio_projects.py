@@ -318,6 +318,8 @@ def inherit(root,c,route,data):
     if route=='/api/buildings/prepare':
         if not b['style']: raise ValueError('请先在素材项目设置共同风格')
         data['appearance']=style
+        if entry.get('description','').strip():
+            data['appearance']+='\n本项具体需求（材质要求优先于共同风格的默认材质；形体以框线图为准）：'+entry['description'].strip()
     elif route in ('/api/props/generate','/api/components/generate','/api/terrain/generate') and data.get('mode','ai')=='ai':
         description=data.get('description','')
         data['description']=description+'\n项目共同风格：'+style if style else description
