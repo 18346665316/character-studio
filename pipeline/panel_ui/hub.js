@@ -72,7 +72,7 @@
  const detailButton=button('详情',()=>dialog.showModal());detailButton.className='production-detail-trigger';actions.append(detailButton);
  dialog.onclick=event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}};
 
- if(entry.wall_axis){const template=el('img');template.src='/api/props/wall-template?axis='+entry.wall_axis;template.alt=entry.wall_axis.toUpperCase()+'轴结构线框';template.className='project-material-image';details.append(el('h3','制作线框'),template,el('p','AI提供墙面与瓦顶材质，程序按线框固定形体和连接端点；不会裁切居中。','terrain-hint'));}
+ if(entry.wall_axis){const template=el('img');template.src='/api/props/wall-template?axis='+entry.wall_axis;template.alt=entry.wall_axis.toUpperCase()+'轴结构线框';template.className='project-material-image';details.append(el('h3','制作线框'),template,el('p','参考线框一体生成整段墙，保留墙面、瓦顶和压边阴影的完整画风；另一轴参考同套外观，拼接效果需验证。','terrain-hint'));}
  if(plan)details.append(el('p',plan.ready?plan.note:plan.reason,'terrain-hint'));
  if(src){const image=el('img');image.src=src;image.alt=entry.title;image.className='project-material-image';const dimensions=el('p',undefined,'terrain-hint');image.onload=()=>{dimensions.textContent=image.naturalWidth+' × '+image.naturalHeight+' px';};image.onerror=()=>{image.hidden=true;dimensions.textContent='暂无图片预览，可进入工作台查看。';};details.append(image,dimensions);}
  if(entry.description)details.append(el('p',entry.description));

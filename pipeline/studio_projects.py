@@ -379,14 +379,15 @@ def inherit(root,c,route,data):
         style+='\n视角与朝向约定：'+spatial
     if route=='/api/props/generate' and entry.get('wall_axis'):
         if b['view']!='isometric_2_1':raise ValueError('院墙模板需要2:1等距视角')
-        data.update(wall_axis=entry['wall_axis'],wall_surface_projection=True,mode='ai',kind='custom')
+        data.update(wall_axis=entry['wall_axis'],wall_surface_projection=False,wall_whole_sprite=True,mode='ai',kind='custom')
         data.pop('wall_material_job',None)
+        data.pop('wall_style_job',None)
         for prior in reversed(task_state(root,p)):
             if prior.get('status')!='complete' or prior.get('family')!='props':continue
             if prior.get('context',{}).get('baseline_revision')!=p['baseline_revision']:continue
             job=read(Path(root)/'.local/props/jobs'/prior['id']/'job.json',{})
-            if job.get('spec',{}).get('wall_axis') and job['spec'].get('wall_surface_projection'):
-                data['wall_material_job']=prior['id'];break
+            if job.get('spec',{}).get('wall_whole_sprite') and job['spec'].get('wall_axis')!=entry['wall_axis']:
+                data['wall_style_job']=prior['id'];break
     c['request_snapshot']={k:data.get(k) for k in ('title','description','appearance','projection','mode')}
     if route=='/api/buildings/prepare':
         if not b['style']: raise ValueError('请先在素材项目设置共同风格')
@@ -447,7 +448,7 @@ def production_plan(root,p,entry):
         from terrain_images import configured
         if not configured(root): raise ValueError('请先配置图片服务')
         return dict(ready=True,route=route,data=data,context=c,
-                    note='共用院墙材质，固定两轴结构与拼接端点' if entry.get('wall_axis') else
+                    note='整段一体生成，保留完整画风；拼接效果待验证' if entry.get('wall_axis') else
                          '默认256px、自定义物件、无碰撞；可到工作台调整' if kind=='prop' else
                          '默认道路宽度50%、自然边缘' if kind=='road' else '使用项目基准与清单需求')
     except ValueError as exc:

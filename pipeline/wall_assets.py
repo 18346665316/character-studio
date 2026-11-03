@@ -50,6 +50,25 @@ def configure(folder,spec,axis):
     spec['wall_reference_sha256']=hashlib.sha256((folder/'inputs/reference.png').read_bytes()).hexdigest()
 
 
+def whole_sprite(folder,spec,root,style_job=None):
+    """Generate intact artwork; a second reference carries appearance only."""
+    spec.update(wall_whole_sprite=True,wall_surface_projection=False)
+    spec['material_prompt']+=' Render the ENTIRE wall as ONE cohesive hand-painted illustration. Preserve artistic outlines, curved ceramic tiles, ridge tiles, eave detailing and soft local shadows where the cap meets plaster. These are part of the artwork. No texture atlas, separate material swatches, flat polygon rendering or independently assembled surfaces. Fine warm ivory lime plaster, restrained natural texture, blue-grey fired clay tiles. Clean readable game-art shapes, delicate painted edges, no random scratch marks. '
+    if style_job:
+        from asset_repository import AssetRepository,name,read
+        source=AssetRepository(root).scoped('.local/props/jobs/'+name(style_job),'.local/props/jobs')
+        job=read(source/'job.json',{})
+        if job.get('status')!='complete' or not job.get('spec',{}).get('wall_whole_sprite'):
+            raise ValueError('院墙风格参考需要已完成的一体生成任务')
+        raw=(source/'inputs/ground.png').read_bytes()
+        digest=hashlib.sha256(raw).hexdigest()
+        if read(source/'generation.json',{}).get('ground',{}).get('sha256')!=digest:
+            raise ValueError('院墙风格参考与生成回执不一致')
+        (folder/'inputs/wall-style.png').write_bytes(raw)
+        spec.update(wall_style_job=style_job,wall_style_sha256=digest)
+        spec['material_prompt']+=' Image 2 is the finished appearance reference ONLY: match its plaster, tile shapes, outline weight, palette and soft shading. Follow Image 1 for the NEW direction and composition. Do not copy the direction or silhouette of Image 2. '
+
+
 def reuse_material(root,folder,spec,identity):
     from asset_repository import AssetRepository,name,read
     source=AssetRepository(root).scoped('.local/props/jobs/'+name(identity),'.local/props/jobs')
@@ -66,6 +85,8 @@ def verify_reference(folder,spec):
     raw=(folder/'inputs/reference.png').read_bytes()
     if hashlib.sha256(raw).hexdigest()!=spec['wall_reference_sha256']:
         raise ValueError('院墙线框已变化，请重新创建制作任务')
+    if spec.get('wall_style_sha256') and hashlib.sha256((folder/'inputs/wall-style.png').read_bytes()).hexdigest()!=spec['wall_style_sha256']:
+        raise ValueError('院墙风格参考已变化，请重新创建制作任务')
 
 
 def process(original,axis):
@@ -100,6 +121,26 @@ def process(original,axis):
                 geometry_passed=iou>=.94 and missing<=.04 and excess<=.04 and max(endpoint_errors)<=.08,
                 texture_seams='requires_visual_validation',occlusion='not_tested')
     return sprite,report
+
+
+def whole_cutout(original):
+    """Remove the reserved pink matte without unmixing painted edge colors."""
+    rgba=original.convert('RGBA')
+    if np.asarray(rgba.getchannel('A')).min()<255:return rgba
+    pixels=np.asarray(rgba).copy();rgb=pixels[:,:,:3].astype(int)
+    background=(rgb[:,:,0]-rgb[:,:,1]>35)&(rgb[:,:,2]-rgb[:,:,1]>15)
+    # Providers sometimes add a narrow white canvas rim. It is background only
+    # in this explicit border band; ivory plaster inside is never selected.
+    border=np.zeros(background.shape,dtype=bool)
+    border[:8]=True;border[-8:]=True;border[:,:8]=True;border[:,-8:]=True
+    background|=border&(rgb.min(axis=2)>210)&(rgb.max(axis=2)-rgb.min(axis=2)<40)
+    edge=np.concatenate([background[0],background[-1],background[:,0],background[:,-1]])
+    if edge.mean()<.98:raise ValueError('一体墙体背景不是预留品红色，未自动清除')
+    foreground=~background
+    if foreground.sum()<100:raise ValueError('一体墙体没有可用主体')
+    pixels[background]=0
+    pixels[foreground,3]=255
+    return Image.fromarray(pixels)
 
 
 def cap_texture(sprite,bbox):
@@ -198,7 +239,7 @@ def publish(root,folder,spec):
     verify_reference(folder,spec)
     axis=spec['wall_axis']
     with Image.open(folder/'inputs/original.png') as original:
-        sprite,report=process(original.convert('RGBA'),axis)
+        sprite,report=process(whole_cutout(original) if spec.get('wall_whole_sprite') else original.convert('RGBA'),axis)
         if spec.get('wall_surface_projection'):
             textures=material_textures(original)
             sprite=compile_surfaces(textures,axis)
@@ -206,7 +247,8 @@ def publish(root,folder,spec):
                         texture_seams='periodic_material_edges; visual_validation_required',occlusion='not_tested')
             for role,texture in textures.items():texture.save(folder/('wall-'+role+'-material.png'))
     sprite.save(folder/'wall-preview.png');atomic(folder/'wall-checks.json',report)
-    if not report['geometry_passed']:
+    whole=spec.get('wall_whole_sprite',False)
+    if not report['geometry_passed'] and not whole:
         raise ValueError('院墙外观偏离线框：轮廓重合 %.1f%%，端面偏差 %s；未发布，不会改动当前素材。' %
                          (report['iou']*100,report['endpoint_errors']))
     delta=list(project(point(axis,LENGTH,0,0)))
@@ -214,6 +256,13 @@ def publish(root,folder,spec):
     config=dict(title=spec['title'],anchor=list(ANCHOR),world_scale=1,behavior='blocking',polygons=[[list(v) for v in ground]])
     stream=BytesIO();sprite.save(stream,'PNG')
     connectors=dict(schema='studio.wall-connectors/1',axis=axis,start=[0,0],end=delta,repeat_offset_px=delta)
+    if whole:
+        if not sprite.getchannel('A').getbbox():raise ValueError('一体墙体抠图为空')
+        report['method']='whole_ai_sprite_background_removal_only'
+        # Appearance previews must never advertise unverified endpoints or physics.
+        config.update(behavior='passable',polygons=[])
+        if not report['geometry_passed']:connectors=None
+        atomic(folder/'wall-checks.json',report)
     files={'sprite.png':stream.getvalue(),'cutout.png':stream.getvalue(),
            'inputs/original.png':(folder/'inputs/original.png').read_bytes(),
            'inputs/line-master.png':(folder/'inputs/reference.png').read_bytes(),
@@ -223,8 +272,9 @@ def publish(root,folder,spec):
         path=folder/('wall-'+role+'-material.png')
         if spec.get('wall_surface_projection') and path.exists():files['inputs/'+path.name]=path.read_bytes()
     if (folder/'generation.json').exists():files['generation.json']=(folder/'generation.json').read_bytes()
+    if spec.get('wall_style_sha256'):files['inputs/style-reference.png']=(folder/'inputs/wall-style.png').read_bytes()
     manifest=dict(schema='studio.static-prop/0.1',asset_family='static_prop',asset_kind='custom',view='isometric_2_1',
-        provenance=dict(art_source='ai_surface_sampling' if spec.get('wall_surface_projection') else 'ai_line_constrained_wall',this_build='fixed_geometry_surface_projection' if spec.get('wall_surface_projection') else 'full_canvas_normalization_no_bbox_fit'),
+        provenance=dict(art_source='ai_whole_wall' if whole else 'ai_surface_sampling' if spec.get('wall_surface_projection') else 'ai_line_constrained_wall',this_build='full_canvas_normalization_no_bbox_fit' if whole else 'fixed_geometry_surface_projection' if spec.get('wall_surface_projection') else 'full_canvas_normalization_no_bbox_fit'),
         canvas_px=list(CANVAS),image='sprite.png',wall_connectors=connectors,
         processing=dict(method='wall_line_constrained',geometry=report),
         normalization=dict(method='whole_canvas_uniform_scale'),limitations=['Texture joins and occlusion need visual validation.'])

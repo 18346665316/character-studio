@@ -119,7 +119,11 @@ def prepare(root,data):
         from wall_assets import configure
         configure(folder,spec,data['wall_axis'])
         spec['wall_surface_projection']=bool(data.get('wall_surface_projection'))
+        if data.get('wall_whole_sprite'):
+            from wall_assets import whole_sprite
+            whole_sprite(folder,spec,root,data.get('wall_style_job'))
         if data.get('wall_material_job'):
+            if spec.get('wall_whole_sprite'):raise ValueError('一体墙体需独立生成，不能复用材质图片')
             from wall_assets import reuse_material
             reuse_material(root,folder,spec,data['wall_material_job'])
     job={'id':job_id,'status':'queued','stage':'等待制作物件','error':None,'spec':spec,

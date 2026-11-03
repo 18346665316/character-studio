@@ -259,6 +259,10 @@ def generate_materials(folder, spec, progress):
         progress('AI 正在生成' + ('地面' if role == 'ground' else '道路') + '材质')
         if not record.get('remote_id'):
             references = [folder/'inputs/reference.png'] if (folder/'inputs/reference.png').exists() else []
+            if spec.get('wall_whole_sprite') and spec.get('wall_style_sha256'):
+                from wall_assets import verify_reference
+                verify_reference(folder,spec)
+                references.append(folder/'inputs/wall-style.png')
             if role == 'road': references.append(folder/'inputs/ground.png')
             record['reference_sha256'] = {p.name: digest(p) for p in references}
             # Persist intent before the non-idempotent network request.

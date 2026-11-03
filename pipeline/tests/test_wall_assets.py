@@ -83,6 +83,52 @@ class WallAssets(unittest.TestCase):
         (folder/'inputs/reference.png').write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError,'线框'):walls.verify_reference(folder,job['spec'])
 
+    def test_whole_wall_preserves_painted_image_without_false_connectors(self):
+        import numpy as np
+        job,folder=self.prepare()
+        walls.whole_sprite(folder,job['spec'],self.root)
+        fixture('b').save(folder/'inputs/original.png')
+        expected,report=walls.process(fixture('b'),'a')
+        self.assertFalse(report['geometry_passed'])
+        with patch('wall_assets.material_textures',side_effect=AssertionError('must not sample textures')):
+            manifest=walls.publish(self.root,folder,job['spec'])
+        image=Image.open(self.root/'prop-kits'/manifest['id']/'sprite.png')
+        self.assertTrue(np.array_equal(np.asarray(image),np.asarray(expected)))
+        self.assertFalse(manifest['processing']['geometry']['geometry_passed'])
+        self.assertIsNone(manifest['wall_connectors'])
+        self.assertEqual(props.module_settings(manifest)['polygons'],[])
+        self.assertEqual(manifest['provenance']['art_source'],'ai_whole_wall')
+
+    def test_style_reference_has_receipt_and_is_not_reused_as_output(self):
+        import hashlib
+        job,folder=self.prepare()
+        walls.whole_sprite(folder,job['spec'],self.root)
+        job['status']='complete';atomic(folder/'job.json',job)
+        fixture('a').save(folder/'inputs/ground.png')
+        digest=hashlib.sha256((folder/'inputs/ground.png').read_bytes()).hexdigest()
+        atomic(folder/'generation.json',dict(ground=dict(sha256=digest)))
+        _,target=self.prepare();spec=dict(description='wall',title='B wall')
+        walls.configure(target,spec,'b');walls.whole_sprite(target,spec,self.root,job['id'])
+        self.assertEqual(spec['wall_style_sha256'],digest)
+        self.assertFalse((target/'inputs/ground.png').exists())
+        walls.verify_reference(target,spec)
+        (target/'inputs/wall-style.png').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError,'风格参考'):walls.verify_reference(target,spec)
+
+    def test_whole_cutout_removes_pink_gradient_and_white_rim_preserving_paint(self):
+        import numpy as np
+        pixels=np.zeros((512,512,3),dtype=np.uint8)
+        pixels[:,:,0]=225;pixels[:,:,1]=140
+        pixels[:,:,2]=np.linspace(175,200,512).astype(np.uint8)[None,:]
+        image=Image.fromarray(pixels)
+        image.paste((255,255,255),(508,0,512,512))
+        image.paste((246,222,233),(507,0,508,512))
+        image.paste((238,227,198),(180,180,320,340))
+        result=walls.whole_cutout(image)
+        self.assertEqual(result.getchannel('A').getbbox(),(180,180,320,340))
+        self.assertEqual(result.getpixel((250,250)),(238,227,198,255))
+        with self.assertRaises(ValueError):walls.whole_cutout(Image.new('RGB',(512,512),'green'))
+
     def test_surface_projection_uses_shared_material_and_exact_geometry(self):
         import numpy as np
         textures=walls.material_textures(fixture('a'))
@@ -118,19 +164,22 @@ class WallAssets(unittest.TestCase):
             plan=projects.production_plan(self.root,p,p['items'][0])
         self.assertTrue(plan['ready'],plan);self.assertEqual(plan['data']['wall_axis'],'a')
         prior=self.root/'.local/props/jobs/shared/job.json'
-        atomic(prior,dict(status='complete',spec=dict(wall_axis='a',wall_surface_projection=True)))
+        atomic(prior,dict(status='complete',spec=dict(wall_axis='b',wall_whole_sprite=True)))
         projects.record_task(self.root,plan['context'],'/api/props/generate',dict(id='shared'))
         p=projects.load(self.root,p['id'])
         with patch('terrain_images.configured',return_value=True):
             shared=projects.production_plan(self.root,p,p['items'][0])
-        self.assertEqual(shared['data']['wall_material_job'],'shared')
+        self.assertEqual(shared['data']['wall_style_job'],'shared')
+        self.assertTrue(shared['data']['wall_whole_sprite'])
+        self.assertFalse(shared['data']['wall_surface_projection'])
         direct=dict(mode='import',description='wall',wall_material_job='unrelated')
         projects.inherit(self.root,shared['context'],'/api/props/generate',direct)
-        self.assertEqual(direct['wall_material_job'],'shared')
+        self.assertEqual(direct['wall_style_job'],'shared')
+        self.assertNotIn('wall_material_job',direct)
         self.assertEqual(direct['mode'],'ai')
         self.assertEqual(direct['wall_axis'],'a')
         p['baseline_revision']+=1
         atomic(projects.folder(self.root,p['id'])/'project.json',p)
         with patch('terrain_images.configured',return_value=True):
             fresh=projects.production_plan(self.root,p,p['items'][0])
-        self.assertNotIn('wall_material_job',fresh['data'])
+        self.assertNotIn('wall_style_job',fresh['data'])
