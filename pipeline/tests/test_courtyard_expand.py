@@ -55,7 +55,7 @@ class CourtyardExpansionTests(unittest.TestCase):
         u=(xx-512)/2+yy-300;v=-(xx-512)/2+yy-300
         # Only one wall drifts; the matching opposite wall must not hide failure.
         visible=(pixels[:,:,3]>0)&(v<60)
-        value=np.clip(u*1.2,0,255).astype(np.uint8)
+        value=np.clip(u*.65,0,255).astype(np.uint8)
         for channel in range(3):pixels[:,:,channel][visible]=value[visible]
         with self.assertRaisesRegex(ValueError,'没有共同重复接口'):
             analyze(Image.fromarray(pixels))
