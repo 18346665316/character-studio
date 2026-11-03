@@ -1,10 +1,46 @@
 'use strict';
+// Compose compatible sprites on their source pixel grid before display sampling.
+// Scaling each transparent cut independently exposes the background at the join.
+class StudioSceneRenderer {
+ constructor(){this.key=null;this.batches=[];}
+ draw(ctx,items){
+  const key=JSON.stringify(items.map(v=>[v.image.src,v.x,v.y,v.scale]));
+  if(key!==this.key){
+   this.key=key;this.batches=[];let run=[];
+   const flush=()=>{
+    if(!run.length)return;
+    const first=run[0],s=first.scale;
+    if(run.length===1){this.batches.push(first);run=[];return;}
+    const left=Math.min(...run.map(v=>v.px)),top=Math.min(...run.map(v=>v.py));
+    const right=Math.max(...run.map(v=>v.px+v.image.naturalWidth)),bottom=Math.max(...run.map(v=>v.py+v.image.naturalHeight));
+    const canvas=document.createElement('canvas');canvas.width=right-left;canvas.height=bottom-top;
+    const native=canvas.getContext('2d');
+    for(const v of run)native.drawImage(v.image,v.px-left,v.py-top);
+    this.batches.push({image:canvas,x:first.x+left*s,y:first.y+top*s,scale:s});run=[];
+   };
+   for(const item of items){
+    const first=run[0];let px=0,py=0;
+    if(first){
+     px=(item.x-first.x)/first.scale;py=(item.y-first.y)/first.scale;
+     const aligned=item.scale===first.scale&&Math.abs(px-Math.round(px))<1e-7&&Math.abs(py-Math.round(py))<1e-7;
+     const left=Math.min(Math.round(px),...run.map(v=>v.px)),top=Math.min(Math.round(py),...run.map(v=>v.py));
+     const right=Math.max(Math.round(px)+item.image.naturalWidth,...run.map(v=>v.px+v.image.naturalWidth));
+     const bottom=Math.max(Math.round(py)+item.image.naturalHeight,...run.map(v=>v.py+v.image.naturalHeight));
+     if(!aligned||right-left>8192||bottom-top>8192||(right-left)*(bottom-top)>16777216){flush();px=0;py=0;}
+    }
+    run.push({...item,px:Math.round(px),py:Math.round(py)});
+   }flush();
+  }
+  for(const v of this.batches)ctx.drawImage(v.image,v.x,v.y,(v.image.naturalWidth||v.image.width)*v.scale,(v.image.naturalHeight||v.image.height)*v.scale);
+ }
+}
 (() => {
  const $=id=>document.getElementById(id), images=new Map(), pixels=new Map();
  let token,scene,selectedModule,selectedInstance,activeTool='select',switching=false;
  let zoom=1,pan=[500,320],drag,dirty=false,space=false;
  let undoStack=[],redoStack=[],saving=false,hover;
  const editor=new StudioSpriteEditor();
+ const sceneRenderer=new StudioSceneRenderer();
  const layer=m=>m.layer==='ground'?0:1;
  const order=(a,b)=>layer(scene.modules.find(m=>m.id===a.module))-layer(scene.modules.find(m=>m.id===b.module))||a.position[1]-b.position[1];
  const sourceHref=m=>m.source?.family==='character'?'/characters.html?character='+m.character_id:['terrain','transition'].includes(m.source?.family)?(m.source.family==='transition'?'/transition.html?kit=':'/terrain.html?kit=')+m.source.id:'/props.html?kit='+m.source.id;
@@ -93,8 +129,10 @@
   ctx.strokeStyle='#c5e3d522';ctx.beginPath();for(let i=-100;i<=100;i++){
    ctx.moveTo((i+100)*64,(i-100)*32);ctx.lineTo((i-100)*64,(i+100)*32);ctx.moveTo((-100-i)*64,(-100+i)*32);ctx.lineTo((100-i)*64,(100+i)*32);
   }ctx.stroke();
-  for(const v of [...scene.instances].sort(order)){
-   const m=scene.modules.find(m=>m.id===v.module),[x,y]=v.position;ctx.drawImage(images.get(m.image),x-m.anchor[0]*scale(m),y-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));
+  const ordered=[...scene.instances].sort(order);
+  sceneRenderer.draw(ctx,ordered.map(v=>{const m=scene.modules.find(m=>m.id===v.module);return {image:images.get(m.image),x:v.position[0]-m.anchor[0]*scale(m),y:v.position[1]-m.anchor[1]*scale(m),scale:scale(m)};}));
+  for(const v of ordered){
+   const m=scene.modules.find(m=>m.id===v.module),[x,y]=v.position;
    if($('show-collision').checked)for(const poly of m.polygons)polygon(ctx,poly.map(p=>[p[0]*scale(m)+x,p[1]*scale(m)+y]),'#ff624a55');
    if(v.id===selectedInstance){ctx.strokeStyle='#ffe194';ctx.strokeRect(x-m.anchor[0]*scale(m),y-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));ctx.fillStyle='#ffe194';ctx.fillRect(x-3/zoom,y-3/zoom,6/zoom,6/zoom);}
   }
