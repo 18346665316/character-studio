@@ -283,6 +283,12 @@ def change(root,data):
             if meta['view'] not in (p['baseline']['view'],'custom'): raise ValueError('模板视角与项目不一致')
         entry['template_id']=template or None
         p['review']=None
+    elif action=='wall_template':
+        entry=item(p,data.get('item'))
+        if entry['kind']!='prop':raise ValueError('院墙模板需绑定物件需求')
+        from wall_assets import validate_axis
+        if p['baseline']['view']!='isometric_2_1':raise ValueError('院墙模板需要2:1等距视角')
+        entry['wall_axis']=validate_axis(data.get('axis'))
     elif action=='set_asset':
         entry=item(p,data.get('item'));family=KINDS[entry['kind']][2];aid=name(data.get('asset'))
         if not any(a['family']==family and a['id']==aid and a['kind']==entry['kind'] for a in available(root)):
@@ -361,7 +367,7 @@ def context(root,data):
 
 def inherit(root,c,route,data):
     if not c or data.get('resume'): return
-    entry=item(load(root,c['project']),c['item'])
+    p=load(root,c['project']);entry=item(p,c['item'])
     expected={'/api/buildings/prepare':('building',),'/api/props/generate':('prop',),
               '/api/components/generate':('component',),'/api/tasks':('character',),
               '/api/terrain/generate':('ground','road','water'),
@@ -371,6 +377,16 @@ def inherit(root,c,route,data):
     spatial='\n'.join(b.get(k,'') for k in ('camera_rules','orientation_rules') if b.get(k))
     if spatial and route in ('/api/buildings/prepare','/api/props/generate'):
         style+='\n视角与朝向约定：'+spatial
+    if route=='/api/props/generate' and entry.get('wall_axis'):
+        if b['view']!='isometric_2_1':raise ValueError('院墙模板需要2:1等距视角')
+        data.update(wall_axis=entry['wall_axis'],wall_surface_projection=True,mode='ai',kind='custom')
+        data.pop('wall_material_job',None)
+        for prior in reversed(task_state(root,p)):
+            if prior.get('status')!='complete' or prior.get('family')!='props':continue
+            if prior.get('context',{}).get('baseline_revision')!=p['baseline_revision']:continue
+            job=read(Path(root)/'.local/props/jobs'/prior['id']/'job.json',{})
+            if job.get('spec',{}).get('wall_axis') and job['spec'].get('wall_surface_projection'):
+                data['wall_material_job']=prior['id'];break
     c['request_snapshot']={k:data.get(k) for k in ('title','description','appearance','projection','mode')}
     if route=='/api/buildings/prepare':
         if not b['style']: raise ValueError('请先在素材项目设置共同风格')
@@ -431,7 +447,8 @@ def production_plan(root,p,entry):
         from terrain_images import configured
         if not configured(root): raise ValueError('请先配置图片服务')
         return dict(ready=True,route=route,data=data,context=c,
-                    note='默认256px、自定义物件、无碰撞；可到工作台调整' if kind=='prop' else
+                    note='共用院墙材质，固定两轴结构与拼接端点' if entry.get('wall_axis') else
+                         '默认256px、自定义物件、无碰撞；可到工作台调整' if kind=='prop' else
                          '默认道路宽度50%、自然边缘' if kind=='road' else '使用项目基准与清单需求')
     except ValueError as exc:
         return dict(ready=False,reason=str(exc))

@@ -99,8 +99,9 @@
    if(v.id===selectedInstance){ctx.strokeStyle='#ffe194';ctx.strokeRect(x-m.anchor[0]*scale(m),y-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));ctx.fillStyle='#ffe194';ctx.fillRect(x-3/zoom,y-3/zoom,6/zoom,6/zoom);}
   }
   if(hover&&activeTool==='place'&&module()){
-   const m=module(),p=snap(hover);ctx.globalAlpha=.5;ctx.drawImage(images.get(m.image),p[0]-m.anchor[0]*scale(m),p[1]-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));ctx.globalAlpha=1;
+   const m=module(),p=placementPoint(m.id,hover);ctx.globalAlpha=.5;ctx.drawImage(images.get(m.image),p[0]-m.anchor[0]*scale(m),p[1]-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));ctx.globalAlpha=1;
   }
+  if(activeTool==='place'&&module()?.wall_connectors){for(const v of scene.instances){const m=scene.modules.find(m=>m.id===v.module);if(m.wall_connectors?.axis!==module().wall_connectors.axis)continue;for(const key of ['start','end']){const p=m.wall_connectors[key].map((n,i)=>n*scale(m)+v.position[i]);ctx.beginPath();ctx.arc(...p,4/zoom,0,Math.PI*2);ctx.fillStyle='#81e9c0';ctx.fill();}}}
   ctx.beginPath();ctx.arc(...scene.spawn,8,0,Math.PI*2);ctx.fillStyle='#ffe194';ctx.fill();ctx.restore();
   $('layout-summary').textContent=`${scene.modules.length} 个模块 · ${scene.instances.length} 个实例${dirty?' · 未保存':' · 已保存'}`;
   $('zoom-label').textContent=Math.round(zoom*100)+'%';$('undo').disabled=!undoStack.length;$('redo').disabled=!redoStack.length;
@@ -120,11 +121,28 @@
  function worldPoint(e){const p=canvasPoint($('scene-canvas'),e);return [(p[0]-pan[0])/zoom,(p[1]-pan[1])/zoom];}
 
  function snap(p){if(!$('snap').checked)return p.map(Math.round);const a=Math.round(p[0]/128+p[1]/64),b=Math.round(p[1]/64-p[0]/128);return [(a-b)*64,(a+b)*32];}
+ function placementPoint(id,p,exclude){
+  if(!$('snap').checked)return p.map(Math.round);
+  const current=scene.modules.find(m=>m.id===id),connectors=current?.wall_connectors;
+  if(!connectors)return snap(p);
+  let best,minimum=18/zoom;
+  for(const v of scene.instances){
+   if(v.id===exclude)continue;
+   const other=scene.modules.find(m=>m.id===v.module),target=other?.wall_connectors;
+   if(!target||target.schema!==connectors.schema||target.axis!==connectors.axis||scale(current)!==scale(other))continue;
+   for(const [from,to] of [['start','end'],['end','start']]){
+    const proposed=target[to].map((n,i)=>v.position[i]+n*scale(other)-connectors[from][i]*scale(current));
+    const distance=Math.hypot(...proposed.map((n,i)=>n-p[i]));
+    if(distance<minimum){minimum=distance;best=proposed;}
+   }
+  }
+  return best||snap(p);
+ }
  function hitAt(p){return [...scene.instances].sort((a,b)=>order(b,a)).find(v=>{
   const m=scene.modules.find(m=>m.id===v.module),x=Math.floor((p[0]-v.position[0])/scale(m)+m.anchor[0]),y=Math.floor((p[1]-v.position[1])/scale(m)+m.anchor[1]),data=pixels.get(m.image);
   return x>=0&&y>=0&&x<data.width&&y<data.height&&data.data[(y*data.width+x)*4+3]>20;
  });}
- function place(id,p){requireSavedModule();checkpoint();const v={id:crypto.randomUUID(),module:id,position:snap(p)};scene.instances.push(v);selectedInstance=v.id;changed();}
+ function place(id,p){requireSavedModule();checkpoint();const v={id:crypto.randomUUID(),module:id,position:placementPoint(id,p)};scene.instances.push(v);selectedInstance=v.id;changed();}
  function duplicate(){const v=instance();if(!v)return;checkpoint();const copy={...structuredClone(v),id:crypto.randomUUID(),position:[v.position[0]+128,v.position[1]]};scene.instances.push(copy);selectedInstance=copy.id;changed();}
  function remove(){if(!instance())return;checkpoint();scene.instances=scene.instances.filter(v=>v.id!==selectedInstance);selectedInstance=null;changed();}
  async function saveLayout(){
@@ -181,7 +199,8 @@
   if(drag.pan){const p=canvasPoint(c,e);pan=[drag.pan[0]+p[0]-drag.start[0],drag.pan[1]+p[1]-drag.start[1]];}
   else{const p=worldPoint(e);if(!drag.started&&Math.hypot(p[0]-drag.start[0],p[1]-drag.start[1])*zoom<3)return;
    if(!drag.started){checkpoint();drag.started=true;}const delta=snap([p[0]-drag.start[0],p[1]-drag.start[1]]);
-   drag.instance.position=[drag.position[0]+delta[0],drag.position[1]+delta[1]];dirty=true;
+   const m=scene.modules.find(m=>m.id===drag.instance.module);
+   drag.instance.position=m.wall_connectors?placementPoint(m.id,drag.position.map((n,i)=>n+p[i]-drag.start[i]),drag.instance.id):[drag.position[0]+delta[0],drag.position[1]+delta[1]];dirty=true;
   }drawScene();
  };
  c.onpointerup=c.onpointercancel=()=>{drag=null;};c.onpointerleave=()=>{hover=null;if(!drag)drawScene();};

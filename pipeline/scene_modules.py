@@ -73,7 +73,8 @@ def source_config(manifest,source):
                 'character_scene':'characters/'+manifest['id']+'/'+manifest['entry_scene'],
                 'character_id':manifest['character']}
     from static_props import module_settings
-    return dict(module_settings(manifest),layer='objects')
+    return dict(module_settings(manifest),layer='objects',
+                **({'wall_connectors':manifest['wall_connectors']} if manifest.get('wall_connectors') else {}))
 
 
 def source_package(root, source):

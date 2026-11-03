@@ -1,0 +1,194 @@
+"""Line-constrained wall generation and fixed-canvas validation, using prop jobs."""
+from io import BytesIO
+import hashlib
+import json
+from pathlib import Path
+import numpy as np
+from PIL import Image, ImageDraw
+from asset_repository import atomic
+from build_courtyard_wall_templates import CANVAS, ANCHOR, LENGTH, faces, point, project, render
+
+
+def validate_axis(axis):
+    if axis not in ('a','b'): raise ValueError('院墙线框只支持 A/B 两轴直墙')
+    return axis
+
+
+def mask(axis):
+    validate_axis(axis)
+    image=Image.new('L',CANVAS);draw=ImageDraw.Draw(image)
+    for face in faces(axis,LENGTH):
+        draw.polygon([(x+ANCHOR[0],y+ANCHOR[1]) for x,y in map(project,face)],fill=255)
+    return image
+
+
+def prompt(axis,style):
+    validate_axis(axis)
+    return (
+        'Use case: one modular courtyard wall sprite for a 2D game. '
+        'Image 1 is the exact structural line master, NOT a style reference. '
+        'Paint ONLY its visible wall and pitched wall-cap surfaces. '
+        'Preserve the entire square canvas and ALL normalized positions, silhouette, wall thickness, '
+        'wall height, cap profile, viewing direction and both cut ends exactly. '
+        'Do not crop, center, zoom, rotate, expand or move the object. '
+        'Keep each end flush and open for joining an identical wall; no posts or end ornaments. '
+        'No wall-cap overhang beyond either longitudinal end. '
+        'This is one plain straight wall, no gate, corners, windows, buildings or vegetation. '
+        'Orthographic 2:1 projection. The wall runs '+
+        ('upper-left to lower-right. ' if axis=='a' else 'upper-right to lower-left. ')+
+        'Subtle plaster and grey tile material, restrained variation; matching colors at both ends. '
+        'Replace the line art with finished surfaces, no black technical outline. '
+        'Pure flat #FF00FF background everywhere outside the exact silhouette, no cast/contact shadows, '
+        'no magenta material or color spill, no ground, text, marks, rulers, labels or extra objects. '
+        'Soft upper-left illumination on the wall only. Shared material direction: '+style)
+
+
+def configure(folder,spec,axis):
+    axis=validate_axis(axis)
+    render(axis).save(folder/'inputs/reference.png')
+    spec.update(wall_axis=axis,size=512,material_prompt=prompt(axis,spec['description']))
+    spec['wall_reference_sha256']=hashlib.sha256((folder/'inputs/reference.png').read_bytes()).hexdigest()
+
+
+def reuse_material(root,folder,spec,identity):
+    from asset_repository import AssetRepository,name,read
+    source=AssetRepository(root).scoped('.local/props/jobs/'+name(identity),'.local/props/jobs')
+    job=read(source/'job.json',{})
+    if not job.get('spec',{}).get('wall_axis'):raise ValueError('请选择院墙材质来源任务')
+    raw=(source/'inputs/ground.png').read_bytes()
+    receipt=read(source/'generation.json',{})
+    if receipt.get('ground',{}).get('sha256')!=hashlib.sha256(raw).hexdigest():raise ValueError('院墙来源原图与回执不一致')
+    (folder/'inputs/ground.png').write_bytes(raw)
+    atomic(folder/'generation.json',receipt)
+    spec['wall_material_job']=identity
+
+def verify_reference(folder,spec):
+    raw=(folder/'inputs/reference.png').read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=spec['wall_reference_sha256']:
+        raise ValueError('院墙线框已变化，请重新创建制作任务')
+
+
+def process(original,axis):
+    from static_props import cutout
+    validate_axis(axis)
+    if original.width!=original.height:raise ValueError('院墙输出必须为正方形，不能通过裁切修正')
+    sprite,background=cutout(original,adaptive_magenta=True,reserved_magenta=True)
+    # Normalize the full canvas using its known scale. Never bbox-fit or recenter.
+    sprite=sprite.resize(CANVAS,Image.Resampling.LANCZOS)
+    expected=np.asarray(mask(axis))>0
+    visible=np.asarray(sprite.getchannel('A'))>127
+    union=int((expected|visible).sum());intersection=int((expected&visible).sum())
+    iou=intersection/max(1,union)
+    missing=int((expected&~visible).sum())/max(1,int(expected.sum()))
+    excess=int((visible&~expected).sum())/max(1,int(expected.sum()))
+    # Separate endpoint bands prevent a high whole-wall IoU hiding broken joints.
+    endpoint_errors=[]
+    for t in (0,LENGTH):
+        footprint=Image.new('L',CANVAS);d=ImageDraw.Draw(footprint)
+        for face in faces(axis,4):
+            pts=[]
+            for x,y,z in face:
+                delta=point(axis,t-2,0,0)
+                px,py=project((x+delta[0],y+delta[1],z))
+                pts.append((px+ANCHOR[0],py+ANCHOR[1]))
+            d.polygon(pts,fill=255)
+        band=np.asarray(footprint)>0
+        endpoint_errors.append(int(((expected^visible)&band).sum())/max(1,int((expected&band).sum())))
+    report=dict(iou=round(iou,5),missing_ratio=round(missing,5),excess_ratio=round(excess,5),
+                endpoint_errors=[round(v,5) for v in endpoint_errors],canvas_px=list(CANVAS),
+                normalized_by='whole_canvas_uniform_scale',background=background,
+                geometry_passed=iou>=.94 and missing<=.04 and excess<=.04 and max(endpoint_errors)<=.08,
+                texture_seams='requires_visual_validation',occlusion='not_tested')
+    return sprite,report
+
+
+def material_textures(original):
+    """Sample appearance only. Provider silhouette is never used as geometry."""
+    from static_props import cutout
+    from PIL import ImageFilter
+    sprite,_=cutout(original.convert('RGBA'),adaptive_magenta=True,reserved_magenta=True)
+    bbox=sprite.getchannel('A').getbbox()
+    if not bbox:raise ValueError('原图没有可提取的墙体材质')
+    x0,y0,x1,y1=bbox;w,h=x1-x0,y1-y0
+    result={}
+    # Conservative interior swatches of the visible plaster and cap. Missing
+    # pixels use the swatch median, never background color. Both axes share them.
+    for role,rect in [('plaster',(.28,.49,.60,.69)),('cap',(.10,.08,.58,.25))]:
+        box=(round(x0+rect[0]*w),round(y0+rect[1]*h),round(x0+rect[2]*w),round(y0+rect[3]*h))
+        patch=sprite.crop(box);rgb=np.array(patch.convert('RGB'));valid=np.array(patch.getchannel('A'))>240
+        if role=='cap':valid&=(rgb.max(axis=2)-rgb.min(axis=2)<65)&(rgb.mean(axis=2)<175)
+        else:valid&=(rgb.mean(axis=2)>100)
+        if valid.sum()<20:raise ValueError('缺少可用的'+role+'材质采样，不能编译院墙')
+        median=np.median(rgb[valid],axis=0).astype(np.uint8);rgb[~valid]=median
+        texture=Image.fromarray(rgb).resize((128,128),Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(.6))
+        # Mirror each swatch into a periodic material. Opposite edges match,
+        # eliminating a value discontinuity at the fixed wall repeat interval.
+        periodic=Image.new('RGB',(256,256));periodic.paste(texture,(0,0));periodic.paste(texture.transpose(Image.Transpose.FLIP_LEFT_RIGHT),(128,0))
+        periodic.paste(periodic.crop((0,0,256,128)).transpose(Image.Transpose.FLIP_TOP_BOTTOM),(0,128))
+        result[role]=periodic
+    return result
+
+
+def compile_surfaces(textures,axis):
+    """Rasterize fixed quads; longitudinal UVs repeat exactly once per wall."""
+    validate_axis(axis)
+    image=Image.new('RGBA',CANVAS)
+    for index,face in enumerate(faces(axis,LENGTH)):
+        # End face has seven profile vertices; it is a separate deterministic fill.
+        if index==3:
+            draw=ImageDraw.Draw(image)
+            for role,indices in [('plaster',(0,1,2,6)),('cap',(6,2,3,4,5))]:
+                color=tuple(np.asarray(textures[role]).mean(axis=(0,1)).astype(int))+(255,)
+                draw.polygon([(x+ANCHOR[0],y+ANCHOR[1]) for x,y in map(project,[face[i] for i in indices])],fill=color)
+            continue
+        vertices=[(x+ANCHOR[0],y+ANCHOR[1]) for x,y in map(project,face)]
+        p0,p1,_,p3=vertices
+        matrix=np.array([[p1[0]-p0[0],p3[0]-p0[0]],[p1[1]-p0[1],p3[1]-p0[1]]],dtype=float)
+        inv=np.linalg.inv(matrix)
+        yy,xx=np.indices((CANVAS[1],CANVAS[0]),dtype=float);dx=(xx-p0[0]).ravel();dy=(yy-p0[1]).ravel()
+        uv=np.stack([inv[0,0]*dx+inv[0,1]*dy,inv[1,0]*dx+inv[1,1]*dy])
+        texture=np.asarray(textures['plaster' if index==0 else 'cap'])
+        tx=np.clip(np.rint(uv[0]*255).astype(int),0,255);ty=np.clip(np.rint(uv[1]*255).astype(int),0,255)
+        layer=Image.fromarray(texture[ty,tx].reshape((512,512,3)))
+        coverage=Image.new('L',CANVAS);ImageDraw.Draw(coverage).polygon(vertices,fill=255)
+        image.paste(layer,(0,0),coverage)
+    # Filling exact polygon coverage preserves all specified endpoints. No image
+    # bbox normalization, hand correction or silhouette from the provider is used.
+    return image
+
+def publish(root,folder,spec):
+    from static_props import _publish_annotation
+    verify_reference(folder,spec)
+    axis=spec['wall_axis']
+    with Image.open(folder/'inputs/original.png') as original:
+        sprite,report=process(original.convert('RGBA'),axis)
+        if spec.get('wall_surface_projection'):
+            textures=material_textures(original)
+            sprite=compile_surfaces(textures,axis)
+            report=dict(source_geometry=report,geometry_passed=True,method='ai_material_on_fixed_geometry',
+                        texture_seams='periodic_material_edges; visual_validation_required',occlusion='not_tested')
+            for role,texture in textures.items():texture.save(folder/('wall-'+role+'-material.png'))
+    sprite.save(folder/'wall-preview.png');atomic(folder/'wall-checks.json',report)
+    if not report['geometry_passed']:
+        raise ValueError('院墙外观偏离线框：轮廓重合 %.1f%%，端面偏差 %s；未发布，不会改动当前素材。' %
+                         (report['iou']*100,report['endpoint_errors']))
+    delta=list(project(point(axis,LENGTH,0,0)))
+    ground=[project(point(axis,t,q,0)) for t,q in [(0,-8),(LENGTH,-8),(LENGTH,8),(0,8)]]
+    config=dict(title=spec['title'],anchor=list(ANCHOR),world_scale=1,behavior='blocking',polygons=[[list(v) for v in ground]])
+    stream=BytesIO();sprite.save(stream,'PNG')
+    connectors=dict(schema='studio.wall-connectors/1',axis=axis,start=[0,0],end=delta,repeat_offset_px=delta)
+    files={'sprite.png':stream.getvalue(),'cutout.png':stream.getvalue(),
+           'inputs/original.png':(folder/'inputs/original.png').read_bytes(),
+           'inputs/line-master.png':(folder/'inputs/reference.png').read_bytes(),
+           'wall-checks.json':json.dumps(report).encode(),'wall-connectors.json':json.dumps(connectors).encode(),
+           'production.json':json.dumps(spec).encode(),'prompt.txt':spec['material_prompt'].encode()}
+    for role in ('plaster','cap'):
+        path=folder/('wall-'+role+'-material.png')
+        if spec.get('wall_surface_projection') and path.exists():files['inputs/'+path.name]=path.read_bytes()
+    if (folder/'generation.json').exists():files['generation.json']=(folder/'generation.json').read_bytes()
+    manifest=dict(schema='studio.static-prop/0.1',asset_family='static_prop',asset_kind='custom',view='isometric_2_1',
+        provenance=dict(art_source='ai_surface_sampling' if spec.get('wall_surface_projection') else 'ai_line_constrained_wall',this_build='fixed_geometry_surface_projection' if spec.get('wall_surface_projection') else 'full_canvas_normalization_no_bbox_fit'),
+        canvas_px=list(CANVAS),image='sprite.png',wall_connectors=connectors,
+        processing=dict(method='wall_line_constrained',geometry=report),
+        normalization=dict(method='whole_canvas_uniform_scale'),limitations=['Texture joins and occlusion need visual validation.'])
+    return _publish_annotation(root,files,manifest,config)

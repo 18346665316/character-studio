@@ -1,0 +1,181 @@
+{
+  "schema": "studio.wall-line-master/1",
+  "projection": "orthographic_2_1",
+  "length": 128,
+  "thickness": 16,
+  "wall_height": 96,
+  "cap_rise": 12,
+  "canvas_px": [
+    512,
+    512
+  ],
+  "anchor_px": [
+    256,
+    280
+  ],
+  "modules": {
+    "a": {
+      "outline": "wall-a-outline.png",
+      "repeat_offset_px": [
+        128,
+        64.0
+      ],
+      "start_section_px": [
+        [
+          8,
+          -4.0
+        ],
+        [
+          -8,
+          4.0
+        ],
+        [
+          -8,
+          -92.0
+        ],
+        [
+          -8,
+          -96.0
+        ],
+        [
+          0,
+          -108.0
+        ],
+        [
+          8,
+          -104.0
+        ],
+        [
+          8,
+          -100.0
+        ]
+      ],
+      "end_section_px": [
+        [
+          136,
+          60.0
+        ],
+        [
+          120,
+          68.0
+        ],
+        [
+          120,
+          -28.0
+        ],
+        [
+          120,
+          -32.0
+        ],
+        [
+          128,
+          -44.0
+        ],
+        [
+          136,
+          -40.0
+        ],
+        [
+          136,
+          -36.0
+        ]
+      ],
+      "connectors": {
+        "start": [
+          0,
+          0
+        ],
+        "end": [
+          128,
+          64.0
+        ]
+      }
+    },
+    "b": {
+      "outline": "wall-b-outline.png",
+      "repeat_offset_px": [
+        -128,
+        64.0
+      ],
+      "start_section_px": [
+        [
+          -8,
+          -4.0
+        ],
+        [
+          8,
+          4.0
+        ],
+        [
+          8,
+          -92.0
+        ],
+        [
+          8,
+          -96.0
+        ],
+        [
+          0,
+          -108.0
+        ],
+        [
+          -8,
+          -104.0
+        ],
+        [
+          -8,
+          -100.0
+        ]
+      ],
+      "end_section_px": [
+        [
+          -136,
+          60.0
+        ],
+        [
+          -120,
+          68.0
+        ],
+        [
+          -120,
+          -28.0
+        ],
+        [
+          -120,
+          -32.0
+        ],
+        [
+          -128,
+          -44.0
+        ],
+        [
+          -136,
+          -40.0
+        ],
+        [
+          -136,
+          -36.0
+        ]
+      ],
+      "connectors": {
+        "start": [
+          0,
+          0
+        ],
+        "end": [
+          -128,
+          64.0
+        ]
+      }
+    }
+  },
+  "verification": {
+    "interface_vertices_matched": 28,
+    "segments_per_axis": 3,
+    "geometry": "exact translated cross-sections",
+    "appearance": "not_generated",
+    "corners": "not_defined",
+    "collision": "not_tested",
+    "occlusion": "not_tested"
+  }
+}

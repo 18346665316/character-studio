@@ -626,6 +626,11 @@ def handler(panel):
                     load_package(panel.root,parts[0])
                     path=panel.scoped('building-kits/'+name(parts[0])+'/'+parts[1],'building-kits')
                     return self.respond(path.read_bytes(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                if parsed.path == '/api/props/wall-template':
+                    from wall_assets import validate_axis
+                    from build_courtyard_wall_templates import render
+                    stream=BytesIO();render(validate_axis(query.get('axis',[''])[0])).save(stream,'PNG')
+                    return self.respond(stream.getvalue(),'image/png')
                 if parsed.path == '/api/props/settings':
                     from static_props import load_package, module_settings
                     from hashlib import sha256

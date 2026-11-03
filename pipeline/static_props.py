@@ -102,6 +102,10 @@ def prompt(description,kind='rock',projection='orthographic_three_quarter'):
 
 def prepare(root,data):
     spec=validate(data)
+    if data.get('wall_axis'):
+        from wall_assets import validate_axis
+        validate_axis(data['wall_axis'])
+        if spec['mode']!='ai' or spec['projection']!='isometric_2_1':raise ValueError('院墙线框需要 AI 模式及2:1等距投影')
     if spec['mode']=='ai' and not configured(root): raise ValueError('请先在项目.env配置图片服务密钥')
     image=decode_sprite(data.get('image')) if spec['mode']=='import' else None
     reference=decode_image(data['reference']) if data.get('reference') else None
@@ -111,6 +115,13 @@ def prepare(root,data):
     if image is not None: image.save(folder/'inputs/original.png')
     if reference is not None: reference.save(folder/'inputs/reference.png')
     spec.update(asset_type='material',material_prompt=prompt(spec['description'],spec['kind'],spec['projection']) if spec['mode']=='ai' else '')
+    if data.get('wall_axis'):
+        from wall_assets import configure
+        configure(folder,spec,data['wall_axis'])
+        spec['wall_surface_projection']=bool(data.get('wall_surface_projection'))
+        if data.get('wall_material_job'):
+            from wall_assets import reuse_material
+            reuse_material(root,folder,spec,data['wall_material_job'])
     job={'id':job_id,'status':'queued','stage':'等待制作物件','error':None,'spec':spec,
          'created_at':datetime.now(timezone.utc).isoformat()}
     atomic(folder/'job.json',job)
@@ -469,9 +480,13 @@ def execute(root,job_id):
             job.update(status='running',stage=stage.replace('地面材质','完整物件'),error=None)
             atomic(folder/'job.json',job)
         try:
-            target=Path(root)/'prop-kits'/job_id
-            if target.exists(): load_package(root,job_id)
+            published=job.get('kit_id',job_id)
+            target=Path(root)/'prop-kits'/published
+            if target.exists(): load_package(root,published)
             else:
+                if job['spec'].get('wall_axis'):
+                    from wall_assets import verify_reference
+                    verify_reference(folder,job['spec'])
                 progress('准备物件原图')
                 if job['spec']['mode']=='ai':
                     generated=folder/'inputs/ground.png'
@@ -482,9 +497,14 @@ def execute(root,job_id):
                         progress('复用已生成的完整物件原图')
                     shutil.copyfile(generated,folder/'inputs/original.png')
                 progress('透明背景处理与素材导出')
-                with Image.open(folder/'inputs/original.png') as image:
-                    package(root,image.convert('RGBA'),job['spec'],job_id,source=folder)
-            job.update(status='complete',stage='物件素材已完成',kit_id=job_id,error=None)
+                if job['spec'].get('wall_axis'):
+                    from wall_assets import publish
+                    manifest=publish(root,folder,job['spec'])
+                    job['kit_id']=manifest['id']
+                else:
+                    with Image.open(folder/'inputs/original.png') as image:
+                        package(root,image.convert('RGBA'),job['spec'],job_id,source=folder)
+            job.update(status='complete',stage='物件素材已完成',kit_id=job.get('kit_id',job_id),error=None)
         except Exception as error:
             job.update(status='failed',stage='制作失败',error=str(error))
         atomic(folder/'job.json',job)
@@ -567,6 +587,12 @@ def annotate(root,data):
             raise ValueError('素材来源已变化，请重新载入')
         with zipfile.ZipFile(Path(root)/'prop-kits'/source_id/'kit.zip') as archive:
             files={n:archive.read(n) for n in manifest['files_sha256']}
+        if manifest.get('wall_connectors'):
+            old_anchor=module_settings(manifest)['anchor']
+            connectors=manifest['wall_connectors']
+            for endpoint in ('start','end'):
+                connectors[endpoint]=[n+old_anchor[i]-config['anchor'][i] for i,n in enumerate(connectors[endpoint])]
+            files['wall-connectors.json']=json.dumps(connectors).encode()
         manifest['provenance']={**manifest.get('provenance',{}),'parent_kit':source_id,'this_build':'annotation_no_ai_no_raster_change'}
         return _publish_annotation(root,files,manifest,config)
 
