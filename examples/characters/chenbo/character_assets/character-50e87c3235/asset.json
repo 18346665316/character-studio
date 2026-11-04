@@ -1,0 +1,382 @@
+{
+  "schema": "character_studio.asset/1.0",
+  "asset_id": "character-50e87c3235",
+  "kind": "character_2d",
+  "engine": {
+    "name": "Godot",
+    "major": 4
+  },
+  "entry_scene": "character.tscn",
+  "preview_scene": "preview.tscn",
+  "api": {
+    "play_action": {
+      "arguments": [
+        "action: String",
+        "restart: bool = false"
+      ],
+      "returns": "bool; false for unknown action",
+      "behavior": "same action continues unless restart=true; completed one-shot stays on last frame"
+    },
+    "has_action": {
+      "arguments": [
+        "action: String"
+      ],
+      "returns": "bool"
+    },
+    "get_action": {
+      "returns": "String"
+    },
+    "set_mirrored": {
+      "arguments": [
+        "value: bool"
+      ],
+      "behavior": "horizontal mirror with ground anchor preserved; does not create another view"
+    },
+    "signals": {
+      "action_finished": "action: String; emitted only for a completed non-looping action"
+    }
+  },
+  "coordinates": {
+    "root": "ground anchor",
+    "x_positive": "right",
+    "y_positive": "down",
+    "units": "pixels",
+    "body_height_px": 96,
+    "scaling": "integer multiples recommended"
+  },
+  "directions": {
+    "available_views": [
+      "three_quarter"
+    ],
+    "default_facing": "source-authored; not normalized",
+    "mirroring": "optional horizontal only",
+    "multi_direction_ready": false
+  },
+  "motion": {
+    "horizontal_displacement": "game-owned; original raster displacement may remain",
+    "jump_vertical_displacement": "baked into sprite frames; do not add another visual jump offset without compensation",
+    "physics_included": false,
+    "collision_included": false
+  },
+  "actions": {
+    "idle": {
+      "role_assignment": "user_selected",
+      "semantic_validation": "unverified",
+      "texture": "assets/textures/idle.png",
+      "equipment": null,
+      "quality": {
+        "status": "passed",
+        "warnings": [],
+        "metrics": {
+          "adjacent_duplicate_ratio": 0.0,
+          "max_center_step_pixels": 1.0,
+          "foreground_area_ratio": 1.086857142857143
+        },
+        "loop": {
+          "status": "unchecked",
+          "silhouette_endpoint_difference": 0.010348583877995643,
+          "message": "端点接近不代表速度连续，循环适用性仍需确认"
+        }
+      },
+      "color_processing": {
+        "palette_id": "20261103-152200-80af08c8",
+        "colors": 64,
+        "dither": false,
+        "alpha": "unchanged"
+      },
+      "delivery": "20261103-152200-80af08c8",
+      "clip": "breathing_idle",
+      "variant": "game",
+      "frame_count": 63,
+      "duration_seconds": 9.93333339691162,
+      "frame_durations_seconds": [
+        0.23333333482678303,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.20000000128009973,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.10000000064004987,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.06666666709336658,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.20000000128009973,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.13333333418673315,
+        0.03333333354668329,
+        0.03333333354668329
+      ],
+      "loop": true,
+      "anchor_px": [
+        59.0,
+        109.0
+      ],
+      "frame_size": 114,
+      "sha256": "7ee09dfda2ef9e9b73b50904bd31c1e7f473daa351d424b1902e37dd372f5710",
+      "manual_review": "pending"
+    },
+    "walk": {
+      "role_assignment": "user_selected",
+      "semantic_validation": "unverified",
+      "texture": "assets/textures/walk.png",
+      "equipment": null,
+      "quality": {
+        "status": "passed",
+        "warnings": [],
+        "metrics": {
+          "adjacent_duplicate_ratio": 0.0,
+          "max_center_step_pixels": 2.0,
+          "foreground_area_ratio": 1.1331230283911673
+        },
+        "loop": {
+          "status": "review",
+          "silhouette_endpoint_difference": 0.18103910016068558,
+          "message": "首尾轮廓差异较大，仅在需要循环时复核"
+        }
+      },
+      "color_processing": {
+        "palette_id": "20261103-152200-80af08c8",
+        "colors": 64,
+        "dither": false,
+        "alpha": "unchanged"
+      },
+      "delivery": "20261103-152200-80af08c8",
+      "clip": "walking",
+      "variant": "game",
+      "frame_count": 17,
+      "duration_seconds": 1.03333330154419,
+      "frame_durations_seconds": [
+        0.03333333230787709,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.06666666461575418,
+        0.03333333230787709,
+        0.03333333230787709
+      ],
+      "loop": true,
+      "anchor_px": [
+        59.0,
+        109.0
+      ],
+      "frame_size": 114,
+      "sha256": "f28c76438b868b3e8a0a5a7e60998e1622706ef512abe62e32398584c1afea9c",
+      "manual_review": "pending"
+    },
+    "run": {
+      "role_assignment": "user_selected",
+      "semantic_validation": "unverified",
+      "texture": "assets/textures/run.png",
+      "equipment": null,
+      "quality": {
+        "status": "passed",
+        "warnings": [],
+        "metrics": {
+          "adjacent_duplicate_ratio": 0.0,
+          "max_center_step_pixels": 4.123105625617661,
+          "foreground_area_ratio": 1.1704918032786886
+        },
+        "loop": {
+          "status": "review",
+          "silhouette_endpoint_difference": 0.3603010348071496,
+          "message": "首尾轮廓差异较大，仅在需要循环时复核"
+        }
+      },
+      "color_processing": {
+        "palette_id": "20261103-152200-80af08c8",
+        "colors": 64,
+        "dither": false,
+        "alpha": "unchanged"
+      },
+      "delivery": "20261103-152200-80af08c8",
+      "clip": "running",
+      "variant": "game",
+      "frame_count": 11,
+      "duration_seconds": 0.633333325386047,
+      "frame_durations_seconds": [
+        0.03333333291505511,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.06666666583011022,
+        0.03333333291505511,
+        0.03333333291505511
+      ],
+      "loop": true,
+      "anchor_px": [
+        59.0,
+        109.0
+      ],
+      "frame_size": 114,
+      "sha256": "8d1a5596f3f23188a45ecf3bcb2d0ea46ce6cebb2de637099bb1313b606c95cf",
+      "manual_review": "pending"
+    },
+    "jump": {
+      "role_assignment": "user_selected",
+      "semantic_validation": "unverified",
+      "texture": "assets/textures/jump.png",
+      "equipment": null,
+      "quality": {
+        "status": "passed",
+        "warnings": [],
+        "metrics": {
+          "adjacent_duplicate_ratio": 0.0,
+          "max_center_step_pixels": 6.082762530298219,
+          "foreground_area_ratio": 1.525179856115108
+        },
+        "loop": {
+          "status": "unchecked",
+          "silhouette_endpoint_difference": 0.005341880341880342,
+          "message": "端点接近不代表速度连续，循环适用性仍需确认"
+        }
+      },
+      "color_processing": {
+        "palette_id": "20261103-152200-80af08c8",
+        "colors": 64,
+        "dither": false,
+        "alpha": "unchanged"
+      },
+      "delivery": "20261103-152200-80af08c8",
+      "clip": "standing_jump",
+      "variant": "game",
+      "frame_count": 37,
+      "duration_seconds": 2.43333339691162,
+      "frame_durations_seconds": [
+        0.10000000261280631,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.06666666840853754,
+        0.03333333420426877,
+        0.03333333420426877
+      ],
+      "loop": false,
+      "anchor_px": [
+        59.0,
+        109.0
+      ],
+      "frame_size": 114,
+      "sha256": "1d196ba9322c9041a72ffc29ecb36a78b043b9278c56687cc71fab95b42ba71e",
+      "manual_review": "pending"
+    }
+  },
+  "validation": {
+    "structural": "passed",
+    "scope": [
+      "projection compatibility",
+      "frame capacity",
+      "positive frame timing",
+      "source sheet hashes"
+    ],
+    "engine_runtime": "not_run_for_this_export",
+    "semantic": "unverified",
+    "artistic": "requires_review",
+    "warnings": [
+      "idle：尚未人工验收动作与循环效果",
+      "idle：循环接缝尚未验收，预览中已按用途开启循环",
+      "walk：尚未人工验收动作与循环效果",
+      "walk：循环接缝尚未验收，预览中已按用途开启循环",
+      "run：尚未人工验收动作与循环效果",
+      "run：循环接缝尚未验收，预览中已按用途开启循环",
+      "jump：尚未人工验收动作与循环效果"
+    ]
+  },
+  "limitations": [
+    "No gameplay controller, hitboxes, damage events or action blending.",
+    "Loop intent is configured; loop seams require review.",
+    "Role assignments are user choices, not proof of motion semantics.",
+    "Equipment is baked into pixels; runtime unequip and independent recoloring are unavailable."
+  ]
+}

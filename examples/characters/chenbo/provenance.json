@@ -1,0 +1,69 @@
+{
+  "created": "2026-11-04",
+  "tool_commit": "9b57029",
+  "character": "character-50e87c3235",
+  "delivery": "20261103-152200-80af08c8",
+  "scope": "Existing character production snapshot; no new generation, reconstruction, rigging or motion download for this showcase.",
+  "source_art": {
+    "path": "workspaces/character-50e87c3235/inputs/upload-88d23e23b200/original.png",
+    "sha256": "5484561b919d1f01387ee6d3e811866b6e20d3c62b4e0386ce09211a4acde7f8",
+    "presentation": "reference.png downsampled to 512x512",
+    "sample_sha256": "a66d5ebc771b8ed4b1a16ac183e7b81b7a0c816f2a5a37741cea64b1152fd99d"
+  },
+  "model_preview": {
+    "path": "workspaces/character-50e87c3235/models/prepared/032e3730f52b/previews/view_07.png",
+    "sha256": "2e6710681608e5bd9793a1646fa283a9d0defdaff109f2d059632bdd782f038f"
+  },
+  "actions": {
+    "idle": {
+      "clip": "breathing_idle",
+      "source": "deliverables/character-50e87c3235/20261103-152200-80af08c8/game/breathing_idle_spritesheet.png",
+      "sample": "character_assets/character-50e87c3235/assets/textures/idle.png",
+      "sha256": "7ee09dfda2ef9e9b73b50904bd31c1e7f473daa351d424b1902e37dd372f5710",
+      "frames": 63,
+      "duration_seconds": 9.93333339691162,
+      "loop": true
+    },
+    "walk": {
+      "clip": "walking",
+      "source": "deliverables/character-50e87c3235/20261103-152200-80af08c8/game/walking_spritesheet.png",
+      "sample": "character_assets/character-50e87c3235/assets/textures/walk.png",
+      "sha256": "f28c76438b868b3e8a0a5a7e60998e1622706ef512abe62e32398584c1afea9c",
+      "frames": 17,
+      "duration_seconds": 1.03333330154419,
+      "loop": true
+    },
+    "run": {
+      "clip": "running",
+      "source": "deliverables/character-50e87c3235/20261103-152200-80af08c8/game/running_spritesheet.png",
+      "sample": "character_assets/character-50e87c3235/assets/textures/run.png",
+      "sha256": "8d1a5596f3f23188a45ecf3bcb2d0ea46ce6cebb2de637099bb1313b606c95cf",
+      "frames": 11,
+      "duration_seconds": 0.633333325386047,
+      "loop": true
+    },
+    "jump": {
+      "clip": "standing_jump",
+      "source": "deliverables/character-50e87c3235/20261103-152200-80af08c8/game/standing_jump_spritesheet.png",
+      "sample": "character_assets/character-50e87c3235/assets/textures/jump.png",
+      "sha256": "1d196ba9322c9041a72ffc29ecb36a78b043b9278c56687cc71fab95b42ba71e",
+      "frames": 37,
+      "duration_seconds": 2.43333339691162,
+      "loop": false
+    }
+  },
+  "runtime_verification": {
+    "godot": "4.6.2",
+    "check": "pipeline/tests/action_set_integration.gd",
+    "result": "ACTION_SET_INTEGRATION_PASS",
+    "art_review": "pending; see exported asset.json"
+  },
+  "capture": {
+    "engine": "Godot 4.6.2 OpenGL compatibility",
+    "frames": 120,
+    "fps": 12,
+    "seconds": 10,
+    "animation_playback": "Original exported frame durations; no pose retouching.",
+    "gif_encoding": "256 color shared palette; 80/80/90 ms duration pattern preserves total 10 seconds."
+  }
+}
