@@ -1,5 +1,7 @@
 'use strict';
 /* Shared library annotation UI used by the prop workbench and scene references. */
+// Keep existing scene coordinates; the exported reference character is one human high.
+window.StudioHumanScale=Object.freeze({sceneUnits:34});
 window.StudioSpriteEditor=class {
  constructor(){
   const root=document.createElement('div');root.className='module-workspace sprite-editor-root';
@@ -11,8 +13,8 @@ window.StudioSpriteEditor=class {
    <canvas id="module-canvas" width="720" height="480" aria-label="素材场景大小预览"></canvas><p id="canvas-help">拖动右侧滑块，比较素材与地格、测试角色的大小。</p>
   </div>
   <aside><label>名称<input id="edit-title" maxlength="80"></label><label>通行类型<select id="behavior"><option value="passable">可通过</option><option value="blocking">阻挡</option><option value="opening">开口（多块碰撞留出间隙）</option></select></label>
-   <section class="size-controls"><h3>场景大小</h3><div class="scale-value"><label>比例<input id="world-percent" type="number" min="1" max="10000" step="any" aria-label="素材比例百分比"></label><span>%</span><button id="reset-world-size">重置为 100%</button></div><input id="world-scale-slider" type="range" min="10" max="300" step="1" value="100" aria-label="拖动调整素材大小"><div class="scale-range"><span>缩小</span><span>放大</span></div>
-   <div class="module-toolbar"><label>宽<input id="world-width" type="number" min="0.01" step="any"></label><span class="aspect-lock" title="保持宽高比例">↔</span><label>高<input id="world-height" type="number" min="0.01" step="any"></label></div><p>宽高等比联动，含图片透明边距。</p><p id="world-scale-label"></p></section>
+   <section class="size-controls"><h3>场景大小 · 标准人高 = 1</h3><p>主体宽高以标准人高衡量，黄色人物为 1 人高。</p><div class="module-toolbar"><label>主体宽（人高）<input id="subject-width" type="number" min="0.000001" step="any"></label><label>主体高（人高）<input id="subject-height" type="number" min="0.000001" step="any"></label></div><p id="subject-size-help"></p><details><summary>原图比例与画布尺寸</summary><div class="scale-value"><label>比例<input id="world-percent" type="number" min="1" max="10000" step="any" aria-label="素材比例百分比"></label><span>%</span><button id="reset-world-size">重置为 100%</button></div><input id="world-scale-slider" type="range" min="10" max="300" step="1" value="100" aria-label="拖动调整素材大小"><div class="scale-range"><span>缩小</span><span>放大</span></div>
+   <div class="module-toolbar"><label>宽<input id="world-width" type="number" min="0.01" step="any"></label><span class="aspect-lock" title="保持宽高比例">↔</span><label>高<input id="world-height" type="number" min="0.01" step="any"></label></div><p>画布宽高等比联动，含图片透明边距。</p><p id="world-scale-label"></p></details></section>
    <section id="annotation-settings" hidden><h3>锚点（原图坐标）</h3><div class="module-toolbar"><label>X<input id="anchor-x" type="number" step="0.5"></label><label>Y<input id="anchor-y" type="number" step="0.5"></label></div><h3>碰撞区域</h3><div id="polygon-list"></div><button id="clear-polygons">清空碰撞</button><p>用多块碰撞留出门洞。</p></section>
   </aside>
  </div>
@@ -25,8 +27,8 @@ window.StudioSpriteEditor=class {
   this.$('edit-mode').onchange=()=>this.draw();
   this.$('close-editor').onclick=()=>this.close();this.dialog.oncancel=e=>{e.preventDefault();this.close();};
   this.$('save-module').onclick=()=>this.save();
-  for(const [id,axis] of [['world-width','width'],['world-height','height'],['world-percent',null],['world-scale-slider',null]]){
-   this.$(id).oninput=()=>{const scale=Number(this.$(id).value)/(axis?this.image[axis]:100);if(!this.$(id).value||!Number.isFinite(scale)||scale<.01||scale>100){this.$(id).setCustomValidity('比例须在 1%–10000% 之间');this.$(id).setAttribute('aria-invalid','true');return;}
+  for(const [id,axis] of [['world-width','width'],['world-height','height'],['subject-width','subjectWidth'],['subject-height','subjectHeight'],['world-percent',null],['world-scale-slider',null]]){
+   this.$(id).oninput=()=>{const scale=Number(this.$(id).value)*(id.startsWith('subject-')?StudioHumanScale.sceneUnits:1)/(axis?(this.subjectBounds?.[axis]??this.image[axis]):100);if(!this.$(id).value||!Number.isFinite(scale)||scale<.01||scale>100){this.$(id).setCustomValidity('比例须在 1%–10000% 之间');this.$(id).setAttribute('aria-invalid','true');return;}
     this.setScale(scale,id);};
    this.$(id).onchange=()=>{if(!this.$(id).checkValidity())this.$(id).reportValidity();};
   }
@@ -50,17 +52,23 @@ window.StudioSpriteEditor=class {
   window.addEventListener('keydown',e=>{if(!this.dialog.open)return;if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();e.target.blur();this.save();}else if(e.key==='Enter'&&this.pending.length&&!/INPUT|SELECT/.test(e.target.tagName)){e.preventDefault();this.$('finish-polygon').click();}});
   window.addEventListener('beforeunload',e=>{if(this.dirty){e.preventDefault();e.returnValue='';}});
  }
- load(config,image,onSave){this.key=config.source?.id?'studio.sprite-settings.'+config.source.id:null;let draft=null;try{draft=this.key?JSON.parse(localStorage.getItem(this.key)):null;}catch{}this.config=structuredClone(config);config=draft||config;this.image=image;this.worldScale=config.world_scale??1;this.syncSize();this.fitPreview();this.onSave=onSave;this.polys=structuredClone(config.polygons);this.pending=[];this.anchor=[...config.anchor];this.dirty=!!draft;this.$('edit-title').value=config.title;this.$('behavior').value=config.behavior;this.syncAnchor();this.$('module-size').textContent=image.width+' × '+image.height+'px';this.draw();}
+ load(config,image,onSave){this.key=config.source?.id?'studio.sprite-settings.'+config.source.id:null;let draft=null;try{draft=this.key?JSON.parse(localStorage.getItem(this.key)):null;}catch{}this.config=structuredClone(config);config=draft||config;this.image=image;this.measureSubject(image);for(const id of ['world-width','world-height','subject-width','subject-height','world-percent','world-scale-slider']){this.$(id).setCustomValidity('');this.$(id).removeAttribute('aria-invalid');}this.worldScale=config.world_scale??1;this.syncSize();this.fitPreview();this.onSave=onSave;this.polys=structuredClone(config.polygons);this.pending=[];this.anchor=[...config.anchor];this.dirty=!!draft;this.$('edit-title').value=config.title;this.$('behavior').value=config.behavior;this.syncAnchor();this.$('module-size').textContent=image.width+' × '+image.height+'px';this.draw();}
  open(config,image,onSave){if(config)this.load(config,image,onSave);if(!this.dialog.open)this.dialog.showModal();this.$('edit-mode').value='edit';this.setView('size');this.message('拖动滑块可即时比较大小；切换“锚点与碰撞”进行原图标注。');this.draw();}
  remember(){this.$('editor-save-state').textContent=this.dirty?'有未保存的修改':'已保存';if(this.key&&this.dirty){try{localStorage.setItem(this.key,JSON.stringify({title:this.$('edit-title').value,anchor:this.anchor,behavior:this.$('behavior').value,polygons:this.polys,world_scale:this.worldScale}));}catch{}}}
  close(){if(this.saving)return;if(this.dirty&&!confirm('放弃尚未保存的素材设置？'))return;if(this.key)localStorage.removeItem(this.key);this.dirty=false;this.dialog.close();}
  message(text,error=false){this.$('editor-status').textContent=text;this.$('editor-status').style.color=error?'#ae382a':'#687c70';}
- async save(){if(this.saving)return;try{for(const id of ['world-width','world-height','world-percent'])if(!this.$(id).checkValidity()){this.$(id).reportValidity();throw Error('请先修正尺寸输入，或点击重置。');}if(this.pending.length)throw Error('请先完成当前碰撞区域，或撤回顶点');this.saving=true;this.message('正在保存素材版本…');const previousKey=this.key;this.$('save-module').disabled=true;
+ async save(){if(this.saving)return;try{for(const id of ['world-width','world-height','subject-width','subject-height','world-percent'])if(!this.$(id).checkValidity()){this.$(id).reportValidity();throw Error('请先修正尺寸输入，或点击重置。');}if(this.pending.length)throw Error('请先完成当前碰撞区域，或撤回顶点');this.saving=true;this.message('正在保存素材版本…');const previousKey=this.key;this.$('save-module').disabled=true;
    const config={title:this.$('edit-title').value,anchor:this.anchor,behavior:this.$('behavior').value,polygons:this.polys,world_scale:this.worldScale};
    const result=await this.onSave(structuredClone(config));if(previousKey)localStorage.removeItem(previousKey);this.load(result||config,this.image,this.onSave);this.message('模块设置已保存为素材库新版本。');
   }catch(e){this.message(e.message,true);}finally{this.saving=false;this.$('save-module').disabled=false;}}
- setScale(value,source){this.worldScale=value;this.dirty=true;for(const id of ['world-width','world-height','world-percent','world-scale-slider']){this.$(id).setCustomValidity('');this.$(id).removeAttribute('aria-invalid');}this.syncSize(source);this.draw();}
- syncSize(source){for(const [id,axis] of [['world-width','width'],['world-height','height']])if(id!==source)this.$(id).value=Number((this.image[axis]*this.worldScale).toFixed(6));if(source!=='world-percent')this.$('world-percent').value=Number((this.worldScale*100).toFixed(4));const slider=this.$('world-scale-slider');slider.min=Math.min(10,this.worldScale*100);slider.max=Math.max(300,Math.ceil(this.worldScale*100));slider.value=this.worldScale*100;this.$('world-scale-label').textContent='地格 128 × 64 · 黄色角色高 34 场景单位';}
+ setScale(value,source){this.worldScale=value;this.dirty=true;for(const id of ['world-width','world-height','subject-width','subject-height','world-percent','world-scale-slider']){this.$(id).setCustomValidity('');this.$(id).removeAttribute('aria-invalid');}this.syncSize(source);this.draw();}
+ measureSubject(image){const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);const data=ctx.getImageData(0,0,c.width,c.height).data;let left=c.width,right=-1,top=c.height,bottom=-1;
+  for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++)if(data[(y*c.width+x)*4+3]){left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}
+  this.subjectBounds=right<left?null:{subjectWidth:right-left+1,subjectHeight:bottom-top+1};
+  for(const id of ['subject-width','subject-height'])this.$(id).disabled=!this.subjectBounds;
+  this.$('subject-size-help').textContent=this.subjectBounds?'按非透明像素范围计算，1 表示一个标准人高；宽高等比联动，不改变原图。':'图片完全透明，无法计算主体尺寸；可使用画布宽高。';
+ }
+ syncSize(source){for(const [id,key] of [['subject-width','subjectWidth'],['subject-height','subjectHeight']])if(id!==source)this.$(id).value=this.subjectBounds?Number((this.subjectBounds[key]*this.worldScale/StudioHumanScale.sceneUnits).toFixed(6)):'';for(const [id,axis] of [['world-width','width'],['world-height','height']])if(id!==source)this.$(id).value=Number((this.image[axis]*this.worldScale).toFixed(6));if(source!=='world-percent')this.$('world-percent').value=Number((this.worldScale*100).toFixed(4));const slider=this.$('world-scale-slider');slider.min=Math.min(10,this.worldScale*100);slider.max=Math.max(300,Math.ceil(this.worldScale*100));slider.value=this.worldScale*100;this.$('world-scale-label').textContent='像素表示原图清晰度；标准人高 = 1，内部换算不改变已有素材大小。';}
  setView(view){this.view=view;const edit=view==='annotation';this.$('view-size').setAttribute('aria-pressed',String(!edit));this.$('view-annotation').setAttribute('aria-pressed',String(edit));this.$('annotation-tools').hidden=this.$('annotation-settings').hidden=edit?false:true;this.$('fit-size-preview').hidden=edit;this.$('canvas-help').textContent=edit?'拖动绿色十字调整锚点、红色顶点调整碰撞。这里始终使用原图坐标。':'拖动滑块即时预览；地格和黄色角色保持固定大小。';this.$('module-canvas').setAttribute('aria-label',edit?'模块锚点与碰撞编辑':'素材场景大小预览');this.draw();}
  fitPreview(){if(!this.image)return;const c=this.$('module-canvas'),im=this.image,scale=this.worldScale;this.previewZoom=Math.min((c.width-200)/Math.max(im.width*scale,128),(c.height-110)/Math.max(im.height*scale,96),2);this.previewScale=scale;}
  drawSize(ctx,c){const s=this.previewZoom||1,im=this.image,k=this.worldScale,a=this.anchor;
@@ -70,9 +78,9 @@ window.StudioSpriteEditor=class {
   ctx.drawImage(im,-a[0]*k,-a[1]*k,im.width*k,im.height*k);
   for(const poly of this.polys)this.polygon(ctx,poly.map(p=>[p[0]*k,p[1]*k]),'#ff624a33');
   ctx.strokeStyle='#7affa4';ctx.beginPath();ctx.moveTo(-7/s,0);ctx.lineTo(7/s,0);ctx.moveTo(0,-7/s);ctx.lineTo(0,7/s);ctx.stroke();ctx.restore();
-  const rx=c.width-75,ry=y;ctx.save();ctx.translate(rx,ry);ctx.scale(s,s);ctx.beginPath();[[-8,0],[-8,-24],[0,-34],[8,-24],[8,0]].forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fillStyle='#f5ce72';ctx.fill();ctx.restore();
-  ctx.fillStyle='#c8d8cd';ctx.font='12px sans-serif';ctx.fillText('测试角色',rx-24,ry+22);ctx.fillText('128 × 64 地格 · 大小对比',18,c.height-18);
-  ctx.fillStyle='#eef5ed';ctx.fillText(Number((im.width*k).toFixed(2))+' × '+Number((im.height*k).toFixed(2))+' 场景单位',18,26);
+  const rx=c.width-75,ry=y;ctx.save();ctx.translate(rx,ry);ctx.scale(s,s);ctx.beginPath();[[-8,0],[-8,-StudioHumanScale.sceneUnits*24/34],[0,-StudioHumanScale.sceneUnits],[8,-StudioHumanScale.sceneUnits*24/34],[8,0]].forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fillStyle='#f5ce72';ctx.fill();ctx.restore();
+  ctx.fillStyle='#c8d8cd';ctx.font='12px sans-serif';ctx.fillText('标准人高 = 1',rx-35,ry+22);ctx.fillText('128 × 64 地格 · 大小对比',18,c.height-18);
+  ctx.fillStyle='#eef5ed';ctx.fillText((this.subjectBounds?Number((this.subjectBounds.subjectWidth*k/StudioHumanScale.sceneUnits).toFixed(3))+' × '+Number((this.subjectBounds.subjectHeight*k/StudioHumanScale.sceneUnits).toFixed(3))+' 人高（主体）':'无可见主体'),18,26);
  }
  syncAnchor(){this.$('anchor-x').value=this.anchor[0];this.$('anchor-y').value=this.anchor[1];}
  setAnchor(value){const old=this.anchor;this.anchor=value;this.polys=this.polys.map(poly=>poly.map(p=>[p[0]+old[0]-value[0],p[1]+old[1]-value[1]]));this.pending=this.pending.map(p=>[p[0]+old[0]-value[0],p[1]+old[1]-value[1]]);this.syncAnchor();this.dirty=true;}

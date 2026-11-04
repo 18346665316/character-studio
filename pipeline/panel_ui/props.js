@@ -33,6 +33,7 @@
   $('prop-edit-settings').disabled=busy||active()||!kit||!kit.integrity.passed;
   $('prop-cleanup').disabled=busy||active()||!kit||!kit.integrity.passed;
   for(const node of nodes.values())node.querySelector('button').disabled=busy||active();
+  for(const node of nodes.values())node.querySelector('.prop-recover').disabled=busy||active();
  }
  function show(kit,force=false){
   if(!kit){selected=null;$('prop-result').hidden=true;$('prop-result-title').textContent='此类型暂无素材';return;}
@@ -53,6 +54,7 @@
   wallOrigins.ai_courtyard_expansion='来源：AI院墙原图，Studio寻找相对墙共同重复切口；同一套四角与直墙用于不同尺寸院落。';
   wallOrigins.program_wall_passage='来源：程序重复同源墙段并切出开放门洞，保留原瓦顶；未生成门框或门扇。';
   if(wallOrigins[kit.provenance.art_source])$('prop-origin').textContent=wallOrigins[kit.provenance.art_source];
+  if(kit.provenance.this_build==='manual_background_seeds_no_ai_call')$('prop-origin').textContent='来源：复用任务 '+kit.provenance.source_job+' 的原图，按人工背景标记处理并另存。未重新生图；仍需检查主体、孔洞和边缘。';
   $('prop-origin').textContent+=' 投影：'+(kit.view==='isometric_2_1'?'等距2:1（角度待人工验收，锚点为占地中心建议）':'斜俯视')+'。';
   $('prop-preview').src=base+(kit.processing?.method==='automatic_wall_repeat'?'repeat-preview.png':'preview.png');$('prop-overlay').src=base+'anchor_collision.png';
   $('prop-sprite').href=base+'sprite.png';$('prop-download').href=base+'kit.zip';
@@ -67,6 +69,9 @@
     nodes.set(job.id,node);$('prop-jobs').append(node);
     node.querySelector('a').href='/api/props/job-image?id='+encodeURIComponent(job.id);
     const result=document.createElement('a');result.className='job-result-link';result.textContent='查看成果 →';node.append(result);
+    const recover=document.createElement('button');recover.type='button';recover.className='prop-recover';recover.textContent='修正背景（不生图）';node.append(recover);
+    recover.onclick=async()=>{try{await StudioPropRecovery.open(job.id,api,kit=>StudioAssets.openKit(kit.id));}catch(e){status(e.message,true);}};
+    const recovered=document.createElement('div');recovered.className='prop-recovered';node.append(recovered);
     node.querySelector('button').onclick=async()=>{
      busy=true;controls();try{await api('/api/props/generate',{resume:job.id});pending=job.id;await refresh();status('已继续任务，成功图片会复用；服务端失败任务可能重新付费生成。');}catch(e){status(e.message,true);}finally{busy=false;controls();}
     };
@@ -76,6 +81,8 @@
    const result=node.querySelector('.job-result-link');result.hidden=job.status!=='complete'||!state.kits.some(k=>k.id===job.kit_id);if(!result.hidden)result.href='/props.html?kit='+encodeURIComponent(job.kit_id);
    node.querySelector('button').hidden=!['failed','interrupted'].includes(job.status);
    node.querySelector('a').hidden=!job.original_available;StudioAssets.jobRow(node,job,state.kits,selected);
+   node.querySelector('.prop-recover').hidden=!job.recovery_available;
+   const recovered=node.querySelector('.prop-recovered');recovered.replaceChildren();for(const id of job.recovered_kits||[]){const link=document.createElement('a');link.textContent='查看原图修正版本 →';link.href='/props.html?kit='+encodeURIComponent(id);recovered.append(link);}
    if(pending===job.id&&job.status==='complete'){pending=null;const kit=state.kits.find(k=>k.id===job.kit_id);if(kit)status('任务已完成，点击该记录的“查看成果”检查物件。');status('物件已完成，请检查透明边缘与落地锚点。');}
    if(pending===job.id&&job.status==='failed'){pending=null;status(job.error,true);}
   }

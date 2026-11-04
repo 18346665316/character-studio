@@ -156,15 +156,30 @@ def reserved_magenta_mask(rgb,key):
     return (red>20)&(blue>15)&(ratio>=key_ratio*.65)&(ratio<=key_ratio*1.65)
 
 
-def cutout(image, *, adaptive_magenta=False, reserved_magenta=False):
+def background_seeds(points, size):
+    if points is None: return []
+    if not isinstance(points,list) or len(points)>64:
+        raise ValueError('背景标记最多64个点')
+    result=[]
+    for point in points:
+        if (not isinstance(point,list) or len(point)!=2 or any(type(v) is not int for v in point)
+                or not 0<=point[0]<size[0] or not 0<=point[1]<size[1]):
+            raise ValueError('背景标记须为原图范围内的整数坐标')
+        if point not in result: result.append(point)
+    return result
+
+
+def cutout(image, *, adaptive_magenta=False, reserved_magenta=False, background_points=None):
     """Keep supplied alpha, or remove border-connected magenta / near-white.
 
     Background removal requires foreground/background color separation. It is not
     semantic segmentation and must reject ordinary opaque scene backgrounds.
     """
     image=image.convert('RGBA')
+    seeds=background_seeds(background_points,image.size)
     alpha=np.asarray(image.getchannel('A'))
     if alpha.min()<255:
+        if seeds: raise ValueError('已有透明度的原图无需标记背景，请直接导入透明PNG')
         if not np.any(alpha>16): raise ValueError('物件图片完全透明')
         if np.any(alpha[0]>16) or np.any(alpha[-1]>16) or np.any(alpha[:,0]>16) or np.any(alpha[:,-1]>16):
             raise ValueError('物件接触画布边缘，可能被裁断，请补充透明留白后导入')
@@ -207,9 +222,11 @@ def cutout(image, *, adaptive_magenta=False, reserved_magenta=False):
     candidate=distance<=tolerance
     if sampled and keyed_frame:
         candidate[0,:]=True;candidate[-1,:]=True;candidate[:,0]=True;candidate[:,-1]=True
+    for x,y in seeds:
+        if not candidate[y,x]: raise ValueError('标记点不属于识别出的单色背景，请在空洞内的纯背景处点选')
     removed=np.zeros((h,w),dtype=bool)
     queue=deque()
-    for y,x in [(0,x) for x in range(w)]+[(h-1,x) for x in range(w)]+[(y,0) for y in range(h)]+[(y,w-1) for y in range(h)]:
+    for y,x in [(0,x) for x in range(w)]+[(h-1,x) for x in range(w)]+[(y,0) for y in range(h)]+[(y,w-1) for y in range(h)]+[(y,x) for x,y in seeds]:
         if candidate[y,x] and not removed[y,x]: removed[y,x]=True;queue.append((y,x))
     while queue:
         y,x=queue.popleft()
@@ -225,7 +242,7 @@ def cutout(image, *, adaptive_magenta=False, reserved_magenta=False):
         extra=chroma & ~removed
         reserved_count=int(extra.sum())
         if reserved_count>max(1,int((~removed).sum()))*.20:
-            raise ValueError('品红清理涉及超过20%的主体区域，可能误删主体；请重新生成不含品红材质的物件')
+            raise ValueError('边缘背景移除后，剩余区域中待清理的品红类像素超过20%，已停止以避免误删；该区域可能包含内部空洞、投影或主体颜色，请检查原图，必要时更换候选或导入已处理的透明PNG')
         enclosed_count=int((extra & ~np.asarray(Image.fromarray(removed.astype('uint8')*255).filter(ImageFilter.MaxFilter(7))).astype(bool)).sum())
         removed |= chroma
     # Decontaminate the boundary of external background and cleaned internal holes.
@@ -266,7 +283,7 @@ def cutout(image, *, adaptive_magenta=False, reserved_magenta=False):
     if min(bbox[0],bbox[1],w-bbox[2],h-bbox[3])<3: raise ValueError('物件接近画布边缘，可能被裁断')
     return result,{'method':('border_connected_near_white_key' if white else
                              'border_connected_sampled_magenta_key' if sampled else 'border_connected_magenta_key'),
-                   'reserved_magenta_cleanup':bool(reserved_magenta and not white),
+                   'background_points':seeds,'reserved_magenta_cleanup':bool(reserved_magenta and not white),
                    'reserved_color_removed_px':reserved_count,'enclosed_or_deep_spill_px':enclosed_count,
                    'semantic_removal_verified':False,
                    'key_rgb':key.tolist(),'removed_fraction':round(float(removed.mean()),4),
@@ -305,6 +322,34 @@ def single_object(image):
             'semantic_single_object':'not_verified'}
 
 
+def prepare_sprite(original,spec):
+    sprite,processing=cutout(original,adaptive_magenta=spec.get('mode')=='ai',reserved_magenta=spec.get('mode')=='ai',background_points=spec.get('background_points'))
+    processing['single_object']=single_object(sprite)
+    bbox=sprite.getchannel('A').getbbox()
+    crop=sprite.crop(bbox)
+    size=spec['size'];padding=size//16
+    factor=(size-padding*2)/max(crop.size)
+    dimensions=tuple(max(1,round(v*factor)) for v in crop.size)
+    crop=crop.resize(dimensions,Image.Resampling.LANCZOS)
+    canvas=Image.new('RGBA',(size,size))
+    offset=((size-dimensions[0])//2,size-padding-dimensions[1])
+    canvas.paste(crop,offset)
+    if processing.get('reserved_magenta_cleanup'):
+        # Resampling/unmatting can mix foreground colors back into the key range.
+        pixels=np.array(canvas)
+        spill=reserved_magenta_mask(pixels[:,:,:3],processing['key_rgb']) & (pixels[:,:,3]>0)
+        visible_spill=int((spill & (pixels[:,:,3]>16)).sum())
+        if visible_spill>max(8,int((pixels[:,:,3]>16).sum())*.02):
+            raise ValueError('缩放后仍有较多品红残色，请重新生成不含品红材质的物件')
+        pixels[spill]=0
+        canvas=Image.fromarray(pixels,'RGBA')
+        processing['resampled_spill_removed_px']=int(spill.sum())
+        processing['output_visible_reserved_pixels']=0
+    normalization={'source_bbox_px':list(bbox),'content_px':list(dimensions),'offset_px':list(offset),
+                   'scale_factor':factor,'world_scale':'caller_defined'}
+    return sprite,canvas,processing,normalization
+
+
 def package(root,original,spec,package_id=None,source=None,provenance=None,settings=None):
     """Stage immutable exports, including inputs and provider receipts."""
     with task_lock(root):
@@ -313,28 +358,8 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
         if target.exists():
             load_package(root,package_id)
             return target
-        sprite,processing=cutout(original,adaptive_magenta=spec.get('mode')=='ai',reserved_magenta=spec.get('mode')=='ai')
-        processing['single_object']=single_object(sprite)
-        bbox=sprite.getchannel('A').getbbox()
-        crop=sprite.crop(bbox)
-        size=spec['size'];padding=size//16
-        factor=(size-padding*2)/max(crop.size)
-        dimensions=tuple(max(1,round(v*factor)) for v in crop.size)
-        crop=crop.resize(dimensions,Image.Resampling.LANCZOS)
-        canvas=Image.new('RGBA',(size,size))
-        offset=((size-dimensions[0])//2,size-padding-dimensions[1])
-        canvas.paste(crop,offset)
-        if processing.get('reserved_magenta_cleanup'):
-            # Resampling/unmatting can mix foreground colors back into the key range.
-            pixels=np.array(canvas)
-            spill=reserved_magenta_mask(pixels[:,:,:3],processing['key_rgb']) & (pixels[:,:,3]>0)
-            visible_spill=int((spill & (pixels[:,:,3]>16)).sum())
-            if visible_spill>max(8,int((pixels[:,:,3]>16).sum())*.02):
-                raise ValueError('缩放后仍有较多品红残色，请重新生成不含品红材质的物件')
-            pixels[spill]=0
-            canvas=Image.fromarray(pixels,'RGBA')
-            processing['resampled_spill_removed_px']=int(spill.sum())
-            processing['output_visible_reserved_pixels']=0
+        sprite,canvas,processing,normalization=prepare_sprite(original,spec)
+        size=spec['size'];padding=size//16;dimensions=normalization['content_px']
         settings=settings or {}
         projection=validate_projection(spec.get('projection','orthographic_three_quarter'),'orthographic_three_quarter')
         isometric=projection==ISOMETRIC
@@ -387,8 +412,7 @@ def package(root,original,spec,package_id=None,source=None,provenance=None,setti
                   'asset_kind':kind,'production_ready':False,'provenance':origin,'canvas_px':[size,size],
                   'image':'sprite.png','anchor_px':anchor,'sprite_offset_px':[-anchor[0],-anchor[1]],
                   'view':projection,'processing':processing,
-                  'normalization':{'source_bbox_px':list(bbox),'content_px':list(dimensions),'offset_px':list(offset),
-                                   'scale_factor':factor,'world_scale':'caller_defined'},
+                  'normalization':normalization,
                   'suggested_collision':{'enabled_by_default':False,'suggestions_only':True,
                        'coordinate_space':'anchor_local_px','polygon':polygon if usage!='none' else [],'width_px':width,'depth_px':depth,'usage':usage,
                        'layers_and_masks':'caller_defined','source':'editable_ellipse_heuristic_not_semantic'},
@@ -469,8 +493,56 @@ def catalog(root):
         job=read(path)
         if job:
             job['original_available']=(path.parent/'inputs/original.png').is_file()
+            job['recovery_available']=job['original_available'] and job.get('status') in ('failed','interrupted') and not any(
+                job.get('spec',{}).get(k) for k in ('wall_axis','wall_corner_build','courtyard_ring_build'))
+            job['recovered_kits']=[k['id'] for k in kits if k.get('provenance',{}).get('source_job')==job['id']]
             jobs.append(job)
     return {'kits':kits,'jobs':sorted((j for j in jobs if j),key=lambda j:j['created_at'],reverse=True)[:60]}
+
+
+def recovery_source(root,job_id):
+    folder=AssetRepository(root).scoped('.local/props/jobs/'+name(job_id),'.local/props/jobs')
+    job=read(folder/'job.json',{})
+    if job.get('status') not in ('failed','interrupted'):
+        raise ValueError('仅支持有原图的失败或中断物件任务')
+    spec=job.get('spec',{})
+    if any(spec.get(k) for k in ('wall_axis','wall_corner_build','courtyard_ring_build')):
+        raise ValueError('墙体与院落任务请使用对应制作流程')
+    raw=(folder/'inputs/original.png').read_bytes()
+    digest=hashlib.sha256(raw).hexdigest()
+    if spec.get('mode')=='ai' and read(folder/'generation.json',{}).get('ground',{}).get('sha256')!=digest:
+        raise ValueError('原图与生成记录不一致，无法继续处理')
+    with Image.open(BytesIO(raw)) as image:
+        if image.width*image.height>4_000_000: raise ValueError('原图超过400万像素')
+        size=list(image.size)
+    return {'job':job_id,'title':spec.get('title',job_id),'source_sha256':digest,'size':size}
+
+
+def recovery_preview(root,data,save=False):
+    """Explicit background seeds; no generation, semantic repair or relaxed gates."""
+    with task_lock(root):
+        info=recovery_source(root,data.get('job'))
+        if data.get('source_sha256')!=info['source_sha256']:
+            raise ValueError('原图已变化，请重新打开背景修正')
+        folder=AssetRepository(root).scoped('.local/props/jobs/'+name(info['job']),'.local/props/jobs')
+        job=read(folder/'job.json')
+        points=background_seeds(data.get('background_points'),info['size'])
+        spec={**job['spec'],'background_points':points}
+        with Image.open(folder/'inputs/original.png') as image: original=image.convert('RGBA')
+        _,canvas,processing,_=prepare_sprite(original,spec)
+        stream=BytesIO();canvas.save(stream,'PNG');raw=stream.getvalue()
+        recipe=json.dumps({'source':info['source_sha256'],'spec':spec},sort_keys=True).encode()
+        digest=hashlib.sha256(recipe+raw).hexdigest()
+        if save:
+            if data.get('preview_sha256')!=digest:
+                raise ValueError('背景标记或处理结果已变化，请重新预览后再另存')
+            output=package(root,original,spec,package_id=info['job']+'-bg-'+digest[:12],source=folder,
+                           provenance={'art_source':'ai_complete_object' if spec['mode']=='ai' else 'external_complete_object',
+                                       'source_job':info['job'],'this_build':'manual_background_seeds_no_ai_call',
+                                       'source_sha256':info['source_sha256']})
+            return load_package(root,output.name)
+        return {**info,'preview_sha256':digest,'image':'data:image/png;base64,'+base64.b64encode(raw).decode(),
+                'processing':processing,'background_points':points}
 
 
 def remake(root,data):

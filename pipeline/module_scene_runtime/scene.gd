@@ -1,4 +1,6 @@
 extends Node2D
+# One standard human; legacy scene coordinates remain unchanged.
+const HUMAN_HEIGHT: float = 34.0
 var player: CharacterBody2D
 var camera: Camera2D
 var data: Dictionary
@@ -74,7 +76,7 @@ func _ready():
 	collider.shape = circle
 	player.add_child(collider)
 	var visual := Polygon2D.new()
-	visual.polygon = PackedVector2Array([Vector2(-8,0),Vector2(-8,-24),Vector2(0,-34),Vector2(8,-24),Vector2(8,0)])
+	visual.polygon = PackedVector2Array([Vector2(-8,0),Vector2(-8,-HUMAN_HEIGHT*24.0/34.0),Vector2(0,-HUMAN_HEIGHT),Vector2(8,-HUMAN_HEIGHT*24.0/34.0),Vector2(8,0)])
 	visual.color = Color("f5ce72")
 	player.add_child(visual)
 	world.add_child(player)
@@ -84,7 +86,7 @@ func _ready():
 	add_child(ui)
 	var label := Label.new()
 	label.position = Vector2(20,20)
-	label.text = "Studio 模块场景验收 · WASD / 方向键移动 · C 碰撞范围\n测试角色半径 8px · 支持墙体局部墙脚排序"
+	label.text = "Studio 模块场景验收 · WASD / 方向键移动 · C 碰撞范围\n标准人高 = 1 · 黄色角色用于尺度与通行对比"
 	ui.add_child(label)
 func _physics_process(_delta):
 	var direction := Vector2(float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))-float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)), float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN))-float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)))

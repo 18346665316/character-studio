@@ -141,7 +141,7 @@ class StudioSceneRenderer {
    const m=module(),p=placementPoint(m.id,hover);ctx.globalAlpha=.5;ctx.drawImage(images.get(m.image),p[0]-m.anchor[0]*scale(m),p[1]-m.anchor[1]*scale(m),m.canvas_px[0]*scale(m),m.canvas_px[1]*scale(m));ctx.globalAlpha=1;
   }
   if(activeTool==='place'&&ports(module()).length){for(const v of scene.instances){const m=scene.modules.find(m=>m.id===v.module);for(const port of ports(m)){if(!ports(module()).some(p=>p.axis===port.axis&&p.kind!==port.kind&&p.group===port.group))continue;const p=port.point.map((n,i)=>n*scale(m)+v.position[i]);ctx.beginPath();ctx.arc(...p,4/zoom,0,Math.PI*2);ctx.fillStyle='#81e9c0';ctx.fill();}}}
-  ctx.beginPath();ctx.arc(...scene.spawn,8,0,Math.PI*2);ctx.fillStyle='#ffe194';ctx.fill();ctx.restore();
+  ctx.save();ctx.translate(...scene.spawn);const human=StudioHumanScale.sceneUnits;ctx.beginPath();[[-8,0],[-8,-human*24/34],[0,-human],[8,-human*24/34],[8,0]].forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fillStyle='#ffe194';ctx.fill();ctx.font='12px sans-serif';ctx.fillText('1 人高',12,-human/2);ctx.restore();ctx.restore();
   $('layout-summary').textContent=`${scene.modules.length} 个模块 · ${scene.instances.length} 个实例${dirty?' · 未保存':' · 已保存'}`;
   $('zoom-label').textContent=Math.round(zoom*100)+'%';$('undo').disabled=!undoStack.length;$('redo').disabled=!redoStack.length;
   const v=instance();$('duplicate').disabled=$('delete').disabled=$('edit-selected').disabled=!v;
@@ -206,12 +206,32 @@ class StudioSceneRenderer {
  function paintLibrary(){
   const term=$('library-search').value.toLowerCase();const shown=library.filter(a=>(a.title+' '+a.id).toLowerCase().includes(term));
   $('library-assets').replaceChildren(...shown.map(asset=>{
-   const card=document.createElement('div');card.className='library-item';const img=document.createElement('img');if(asset.image)img.src=asset.image;img.alt=asset.family==='character'?'人物动作包':'';
+   const card=document.createElement('div');card.className='library-item';card.dataset.kit=asset.id;const img=document.createElement('img');if(asset.image)img.src=asset.image;img.alt=asset.family==='character'?'人物动作包':'';
    const title=document.createElement('strong');title.textContent=asset.title;const version=document.createElement('small');version.textContent=asset.id+(asset.family==='building'?' · 建筑线稿来源，视角需目视复核':'');
+   const selectors={};
+   let tilePicker;
+   if(asset.family==='transition'){
+    card.classList.add('transition-library-item');
+    tilePicker=document.createElement('div');tilePicker.className='transition-picker';
+    const variantLabel=document.createElement('label');variantLabel.textContent='变化组';
+    const variant=document.createElement('select');variant.setAttribute('aria-label','地表变化组');
+    for(const value of [...new Set(asset.tiles.map(t=>t.variant))].sort((a,b)=>a-b)){const option=document.createElement('option');option.value=value;option.textContent='变化 '+(value+1);variant.append(option);}
+    variantLabel.append(variant);tilePicker.append(variantLabel);
+    const tiles=document.createElement('div');tiles.className='transition-tiles';tilePicker.append(tiles);
+    const choose=(corners)=>{selectors.corners=corners;selectors.variant=Number(variant.value);for(const b of tiles.children)b.setAttribute('aria-pressed',String(Number(b.dataset.corners)===corners));};
+    const render=()=>{tiles.replaceChildren();const available=asset.tiles.filter(t=>t.variant===Number(variant.value));
+     for(const tile of available){const b=document.createElement('button');b.type='button';b.dataset.corners=tile.corners;
+      const label=tile.corners===0?'第一地表':tile.corners===15?'第二地表':'连接形状 '+tile.corners;
+      b.setAttribute('aria-label',label);b.title=label;
+      const preview=document.createElement('img');preview.alt='';preview.loading='lazy';preview.src='/api/module-scenes/transition-image?'+new URLSearchParams({kit:asset.id,corners:tile.corners,variant:tile.variant});
+      b.append(preview);b.onclick=()=>choose(tile.corners);tiles.append(b);}
+     if(available.length)choose(available.some(t=>t.corners===selectors.corners)?selectors.corners:available[0].corners);
+    };variant.onchange=render;render();
+   }
    const button=document.createElement('button');button.textContent=asset.view===scene.projection?(replaceTarget?'替换此引用':'加入场景'):'视角不兼容';button.disabled=asset.view!==scene.projection;
-   button.onclick=run(async()=>{if(dirty)await saveLayout();const saved=await mutate({action:'adopt',kit:asset.id,family:asset.family||'prop',...(replaceTarget?{module:replaceTarget}:{})});scene=saved;
-    selectedModule=replaceTarget||scene.modules.find(m=>m.source?.id===asset.id||(asset.family==='character'&&m.character_id===asset.id)).id;await Promise.all(scene.modules.map(image));renderModules();drawScene();$('library-dialog').close();setTool('place');status('已引用素材库版本；点击画布放置。');});
-   card.append(img,title,version,button);return card;
+   button.onclick=run(async()=>{if(dirty)await saveLayout();const saved=await mutate({action:'adopt',kit:asset.id,family:asset.family||'prop',...selectors,...(replaceTarget?{module:replaceTarget}:{})});scene=saved;
+    selectedModule=replaceTarget||scene.modules.find(m=>(m.source?.id===asset.id||(asset.family==='character'&&m.character_id===asset.id))&&(asset.family!=='transition'||(m.source.corners===selectors.corners&&m.source.variant===selectors.variant))).id;await Promise.all(scene.modules.map(image));renderModules();drawScene();$('library-dialog').close();setTool('place');status('已引用素材库版本；点击画布放置。');});
+   card.append(img,title,version);if(tilePicker)card.append(tilePicker);card.append(button);return card;
   }));
  }
  async function openLibrary(replace=false){requireSavedModule();replaceTarget=replace?selectedModule:null;if(replace&&!replaceTarget)throw Error('请先选择素材');library=(await api('/api/module-scenes/library')).assets;paintLibrary();$('library-dialog').showModal();}

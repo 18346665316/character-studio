@@ -175,6 +175,27 @@ class PanelOperationsBrowserTests(unittest.TestCase):
         self.assertFalse(self.page.locator('#prop-result').is_visible())
         self.assertFalse(self.errors)
 
+    def test_failed_prop_background_preview_is_invalidated_by_seed_changes(self):
+        self.props['jobs'][1].update(original_available=True,recovery_available=True)
+        self.context.route('**/api/props/job-image?*',lambda route:route.fulfill(content_type='image/png',body=self.png))
+        self.context.route('**/api/props/recovery-source?*',lambda route:route.fulfill(json={
+            'job':'failed','title':'Basket','size':[256,256],'source_sha256':'original'}))
+        import base64
+        self.post_result={'preview_sha256':'preview','image':'data:image/png;base64,'+base64.b64encode(self.png).decode()}
+        self.page.goto(self.url+'/props.html?task=failed')
+        self.page.locator('.prop-recover:visible').click()
+        self.page.wait_for_selector('#prop-recovery-dialog[open]')
+        self.page.locator('#prop-recovery-source').click(position={'x':100,'y':100})
+        self.page.click('#prop-recovery-run')
+        self.page.wait_for_function("() => !document.querySelector('#prop-recovery-save').disabled")
+        self.assertEqual(self.posts[-1][0],'/api/props/recovery-preview')
+        self.assertEqual(self.posts[-1][1]['source_sha256'],'original')
+        self.assertEqual(len(self.posts[-1][1]['background_points']),1)
+        self.page.click('#prop-recovery-undo')
+        self.assertTrue(self.page.locator('#prop-recovery-save').is_disabled())
+        self.assertTrue(self.page.locator('#prop-recovery-preview').is_hidden())
+        self.assertFalse(self.errors)
+
     def test_terrain_remake_submits_edited_name_and_keeps_source(self):
         self.terrain['kits'] = [{'id': 'ground', 'title': '原地面', 'asset_type': 'material',
             'material_kind': 'grass', 'projection': 'top_down', 'view': 'top_down',

@@ -161,7 +161,25 @@ def library(root):
             characters.append(dict(family='character',id=c['id'],title=c['display_name'],
                 view='isometric_2_1',canvas_px=[120,120],image=None,
                 href='/characters.html?character='+c['id']))
-    return props+terrain+buildings+characters
+    transitions=[]
+    from terrain_transition import catalog as transition_catalog
+    for manifest in transition_catalog(root):
+        tiles=manifest.get('projection_spec',{}).get('tiles',[])
+        if not manifest.get('integrity',{}).get('passed') or manifest.get('view')!='isometric_2_1' or not tiles:
+            continue
+        transitions.append(dict(family='transition',id=manifest['id'],title=manifest['title'],
+            view=manifest['view'],image='/transition-asset/'+manifest['id']+'/preview.png',
+            href='/transition.html?kit='+manifest['id'],
+            tiles=[dict(corners=t['corners'],variant=t['variant']) for t in tiles]))
+    return props+terrain+transitions+buildings+characters
+
+
+def transition_image_bytes(root, identity, corners, variant):
+    """Only serve a verified tile selected from the manifest, never a user path."""
+    source=dict(family='transition',id=name(identity),corners=corners,variant=variant)
+    raw,manifest=source_package(root,source)
+    with zipfile.ZipFile(BytesIO(raw)) as archive:
+        return archive.read(source_image(manifest,source))
 
 
 def change(root, data):

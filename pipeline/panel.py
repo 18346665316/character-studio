@@ -514,7 +514,7 @@ def handler(panel):
                 except (ValueError,KeyError,OSError,TypeError) as exc:
                     return self.respond({'error':str(exc)},code=400)
             if parsed.path.startswith('/api/module-scenes/'):
-                from scene_modules import state, image_bytes, export, library
+                from scene_modules import state, image_bytes, export, library, transition_image_bytes
                 try:
                     if parsed.path=='/api/module-scenes/state':
                         return self.respond(dict(token=panel.token,**state(panel.root,query.get('scene',[None])[0])))
@@ -522,6 +522,9 @@ def handler(panel):
                         return self.respond(dict(assets=library(panel.root)))
                     if parsed.path=='/api/module-scenes/image':
                         return self.respond(image_bytes(panel.root,query.get('file',[''])[0]),'image/png')
+                    if parsed.path=='/api/module-scenes/transition-image':
+                        return self.respond(transition_image_bytes(panel.root,query.get('kit',[''])[0],
+                            int(query.get('corners',['0'])[0]),int(query.get('variant',['0'])[0])),'image/png')
                     if parsed.path=='/api/module-scenes/export':
                         return self.respond(export(panel.root,query.get('scene',[''])[0]),'application/zip')
                     raise ValueError('未知场景接口')
@@ -581,7 +584,7 @@ def handler(panel):
                                    '/transition.html','/transition.js','/water.html','/water-shore.html'):
                     file = STATIC / ('index.html' if parsed.path=='/' else parsed.path[1:])
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
-                if parsed.path in ('/sprite-editor.js','/module-scenes.html','/module-scenes.js','/module-scenes.css','/building-structure.html','/building-structure.js','/buildings.html','/buildings.js','/components.html','/components.js','/props.html','/props.js'):
+                if parsed.path in ('/sprite-editor.js','/prop-recovery.js','/prop-recovery.css','/module-scenes.html','/module-scenes.js','/module-scenes.css','/building-structure.html','/building-structure.js','/buildings.html','/buildings.js','/components.html','/components.js','/props.html','/props.js'):
                     file=STATIC/parsed.path[1:]
                     return self.respond(file.read_bytes(),mimetypes.guess_type(file.name)[0]+'; charset=utf-8')
                 if parsed.path == '/api/image-provider':
@@ -657,6 +660,9 @@ def handler(panel):
                     job_id=name(query.get('id',[''])[0])
                     path=panel.scoped('.local/props/jobs/'+job_id+'/inputs/original.png','.local/props/jobs/'+job_id)
                     return self.respond(path.read_bytes(),'image/png')
+                if parsed.path == '/api/props/recovery-source':
+                    from static_props import recovery_source
+                    return self.respond(recovery_source(panel.root,query.get('id',[''])[0]))
                 if parsed.path == '/api/components/state':
                     from fence_components import catalog
                     from component_jobs import catalog as jobs
@@ -864,6 +870,9 @@ def handler(panel):
                         result=publish(panel.root,data.get('task'),data.get('revision'))
                     elif route == '/api/props/generate':
                         result=panel.start_terrain(data,props=True)
+                    elif route in ('/api/props/recovery-preview','/api/props/recovery-save'):
+                        from static_props import recovery_preview
+                        result=recovery_preview(panel.root,data,save=route.endswith('-save'))
                     elif route == '/api/props/annotate':
                         from static_props import annotate
                         result=annotate(panel.root,data)

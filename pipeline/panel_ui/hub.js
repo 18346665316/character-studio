@@ -43,7 +43,7 @@
  const palette=textArea(b.palette),lighting=input(b.lighting),height=input(b.character_height_px,'number');height.min=16;height.max=512;
  const projection=el('select');for(const [value,label]of [['isometric_2_1','2:1 等距地格'],['top_down','正俯视'],['orthographic_three_quarter','斜俯视']]){const o=el('option',label);o.value=value;projection.append(o);}projection.value=b.view;
  const cell=el('select');for(const n of [64,128]){const o=el('option',n+' px');o.value=n;cell.append(o);}cell.value=b.cell_px;
- form.append(field('整套素材的风格描述',style),field('配色约定',palette),field('光照约定',lighting),field('目标视角',projection),field('相机与画面轴线约定',camera),field('物件默认朝向约定',orientation),field('地格宽度',cell),field('参考人物高度（px）',height));
+ form.append(field('整套素材的风格描述',style),field('配色约定',palette),field('光照约定',lighting),field('目标视角',projection),field('相机与画面轴线约定',camera),field('物件默认朝向约定',orientation),field('地格宽度',cell),field('人物制作分辨率（px / 标准人高）',height));
  const submit=el('button','保存共同基准');submit.type='submit';form.append(submit,el('p','修改后可重新组合查看；已有素材与任务保留当时的基准。AI生成的角度与画风仍需挑选。','terrain-hint'));
  form.onsubmit=e=>{e.preventDefault();action({action:'baseline',baseline:{style:style.value,palette:palette.value,lighting:lighting.value,camera_rules:camera.value,orientation_rules:orientation.value,view:projection.value,cell_px:Number(cell.value),character_height_px:Number(height.value)}});};box.append(form);root.append(box);}
  function production(root){

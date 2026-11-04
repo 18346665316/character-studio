@@ -113,7 +113,7 @@ class ModuleSceneTests(unittest.TestCase):
         path.write_text(json.dumps(self.scene));(folder/'tiles/ground.png').write_bytes(b'corrupt')
         with self.assertRaises(ValueError):sm.export(self.root,self.scene['id'])
 
-    def test_transition_selectors_pin_distinct_tiles_and_export_one_source(self):
+    def transition_fixture(self):
         kit='transition-fixture';folder=self.root/'terrain-transitions'/kit;folder.mkdir(parents=True)
         tiles=[dict(corners=b,variant=v,image=f'tiles/iso-{b}-{v}.png',anchor_px=[64,32])
                for b,v in [(0,0),(3,1)]]
@@ -128,6 +128,11 @@ class ModuleSceneTests(unittest.TestCase):
             for relative,raw in files.items():
                 path=folder/relative;path.parent.mkdir(parents=True,exist_ok=True)
                 path.write_bytes(raw);z.writestr(relative,raw)
+        return kit,tiles
+
+    def test_transition_selectors_pin_distinct_tiles_and_export_one_source(self):
+        kit,tiles=self.transition_fixture()
+        folder=self.root/'terrain-transitions'/kit
         for b,v in [(0,0),(3,1),(3,1)]:
             self.change(action='adopt',family='transition',kit=kit,corners=b,variant=v)
         self.assertEqual(len(self.scene['modules']),2)
@@ -266,6 +271,7 @@ class ModuleSceneBrowserTests(ModuleSceneTests):
             page.wait_for_function('() => document.querySelector("#asset-cards").children.length === 1')
             page.click('#view-annotation')
             page.fill('#anchor-y','100');page.locator('#anchor-y').blur()
+            page.locator('#module-dialog details').evaluate('(d)=>d.open=true')
             page.fill('#world-width','64');page.locator('#world-width').blur()
             self.assertEqual(page.input_value('#world-height'),'64')
             page.click('#save-module')
@@ -301,12 +307,15 @@ class ModuleSceneBrowserTests(ModuleSceneTests):
             page.click('#open-editor')
             expect(page.locator('#view-size')).to_have_attribute('aria-pressed','true')
             canvas=page.locator('#module-canvas');before=canvas.evaluate('(c)=>c.toDataURL()')
+            page.locator('#module-dialog details').evaluate('(d)=>d.open=true')
             page.locator('#world-scale-slider').press('End')
             self.assertEqual(page.input_value('#world-width'),'384')
             self.assertNotEqual(before,canvas.evaluate('(c)=>c.toDataURL()'))
+            page.locator('#module-dialog details').evaluate('(d)=>d.open=true')
             page.fill('#world-percent','50')
             self.assertEqual(page.input_value('#world-height'),'64')
             expect(page.locator('#editor-save-state')).to_have_text('有未保存的修改')
+            page.locator('#module-dialog details').evaluate('(d)=>d.open=true')
             page.fill('#world-width','0')
             page.click('#save-module')
             expect(page.locator('#editor-status')).to_contain_text('请先修正尺寸')
@@ -323,6 +332,112 @@ class ModuleSceneBrowserTests(ModuleSceneTests):
             self.assertLessEqual(rect['y']+rect['height'],844)
             self.assertEqual(errors,[])
             browser.close()
+
+    def test_subject_size_scales_export_without_changing_source_pixels(self):
+        from playwright.sync_api import sync_playwright,expect
+        original=self.imported()
+        self.change(action='module',module=original['id'],title='带留白的物件',anchor=[64,110],
+                    behavior='blocking',polygons=[[[-20,-10],[20,-10],[20,0],[-20,0]]],world_scale=1)
+        panel=Panel(self.root);server=ThreadingHTTPServer(('127.0.0.1',0),handler(panel))
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            page=browser.new_page(viewport={'width':1440,'height':1000})
+            page.goto('http://127.0.0.1:'+str(server.server_port)+'/module-scenes.html?scene='+self.scene['id'])
+            page.click('#open-editor')
+            # Canvas is 128x128, but visible pixels occupy only 128x71.
+            self.assertEqual(page.input_value('#subject-height'),str(round(71/34,6)))
+            page.fill('#subject-height',str(35.5/34))
+            self.assertEqual(page.input_value('#world-height'),'64')
+            self.assertEqual(page.input_value('#subject-width'),str(round(64/34,6)))
+            page.fill('#subject-width','0')
+            page.click('#save-module')
+            expect(page.locator('#editor-status')).to_contain_text('请先修正尺寸')
+            page.fill('#subject-height',str(35.5/34))
+            page.click('#save-module')
+            expect(page.locator('#status')).to_contain_text('模块设置已保存')
+            page.click('#close-editor');page.click('#open-editor')
+            self.assertEqual(page.input_value('#subject-height'),str(round(35.5/34,6)))
+            page.set_viewport_size({'width':390,'height':844})
+            self.assertFalse(page.evaluate('document.documentElement.scrollWidth>innerWidth'))
+            exported=sm.export(self.root,self.scene['id'])
+            with zipfile.ZipFile(BytesIO(exported)) as archive:
+                m=json.loads(archive.read('scene.json'))['modules'][0]
+                self.assertEqual(m['world_scale'],.5)
+                self.assertEqual(m['anchor'],[64,110])
+                self.assertEqual(m['polygons'],[[[-20,-10],[20,-10],[20,0],[-20,0]]])
+                self.assertEqual(archive.read('images/'+m['image']),png())
+            checks=page.evaluate('''async()=>{
+              const editor=new StudioSpriteEditor();
+              const c=document.createElement('canvas');c.width=32;c.height=32;
+              const image=await createImageBitmap(c);
+              editor.$('subject-height').setCustomValidity('old error');
+              editor.load({title:'透明图',anchor:[16,32],polygons:[],behavior:'passable',world_scale:1},image,()=>{});
+              const result={disabled:editor.$('subject-height').disabled,empty:editor.$('subject-height').value==='',canvas:editor.$('world-height').value,valid:editor.$('subject-height').validationMessage===''};
+              editor.root.remove();return result;
+            }''')
+            self.assertEqual(checks,dict(disabled=True,empty=True,canvas='32',valid=True))
+            page.set_viewport_size({'width':1440,'height':1000})
+            page.fill('#subject-height','0.6')
+            self.assertAlmostEqual(float(page.input_value('#world-height')),128*.6*34/71,places=5)
+            page.click('#save-module')
+            expect(page.locator('#status')).to_contain_text('模块设置已保存')
+            expect(page.locator('#editor-save-state')).to_have_text('已保存')
+            with zipfile.ZipFile(BytesIO(sm.export(self.root,self.scene['id']))) as archive:
+                m=json.loads(archive.read('scene.json'))['modules'][0]
+                # 0.6 human heights remains 0.6 relative to the exported reference.
+                self.assertAlmostEqual(71*m['world_scale']/34,.6)
+                self.assertIn('const HUMAN_HEIGHT: float = 34.0',archive.read('scene.gd').decode())
+            browser.close()
+
+    def test_transition_library_visual_pick_place_reopen_and_export(self):
+        from playwright.sync_api import sync_playwright,expect
+        kit,tiles=self.transition_fixture()
+        panel=Panel(self.root);server=ThreadingHTTPServer(('127.0.0.1',0),handler(panel))
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        base='http://127.0.0.1:'+str(server.server_port)
+        with sync_playwright() as pw:
+            browser=pw.chromium.launch(channel='chrome',headless=True)
+            try:
+                page=browser.new_page(viewport={'width':1440,'height':1000})
+                errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+                page.goto(base+'/module-scenes.html?scene='+self.scene['id'])
+                def pick(variant,corners):
+                    page.click('#show-library');page.fill('#library-search',kit)
+                    card=page.locator('.library-item[data-kit="'+kit+'"]')
+                    card.locator('select').select_option(str(variant))
+                    tile=card.locator('.transition-tiles button[data-corners="'+str(corners)+'"]')
+                    tile.click();expect(tile).to_have_attribute('aria-pressed','true')
+                    expect(tile.locator('img')).to_have_js_property('naturalWidth',128)
+                    card.get_by_role('button',name='加入场景',exact=True).click()
+                    expect(page.locator('#library-dialog')).not_to_be_visible()
+                pick(0,0)
+                pick(1,3)
+                expect(page.locator('.asset-card[aria-pressed=true]')).to_contain_text('角点 3 / 变化 2')
+                page.locator('#scene-canvas').click(position={'x':300,'y':250})
+                page.click('#save-layout');expect(page.locator('#status')).to_have_text('布局已保存。')
+                # Selecting the same tile reuses its module, with the exact selector.
+                pick(1,3)
+                expect(page.locator('.asset-card')).to_have_count(2)
+                page.reload();expect(page.locator('#layout-summary')).to_contain_text('1 个实例')
+                with page.expect_download() as pending:page.click('#export')
+                target=self.root/'transition-download.zip';pending.value.save_as(target)
+                with zipfile.ZipFile(target) as archive:
+                    saved=json.loads(archive.read('scene.json'))
+                    selected=next(m for m in saved['modules'] if m['id']==saved['instances'][0]['module'])
+                    self.assertEqual((selected['source']['corners'],selected['source']['variant']),(3,1))
+                    self.assertEqual(selected['behavior'],'blocking')
+                    self.assertEqual(archive.read('images/'+selected['image']),png())
+                response=page.request.get(base+'/api/module-scenes/transition-image?kit='+kit+'&corners=15&variant=9')
+                self.assertEqual(response.status,400)
+                # A damaged package disappears from the picker and cannot serve a tile.
+                (self.root/'terrain-transitions'/kit/'tiles/top.png').write_bytes(b'broken')
+                self.assertFalse(any(a['family']=='transition' for a in sm.library(self.root)))
+                self.assertEqual(page.request.get(base+'/api/module-scenes/transition-image?kit='+kit).status,400)
+                self.assertEqual(errors,[])
+            finally:browser.close()
 
     def test_scaled_scene_alpha_selection(self):
         from playwright.sync_api import sync_playwright,expect
@@ -376,6 +491,7 @@ class ModuleSceneBrowserTests(ModuleSceneTests):
             page.click('#prop-edit-settings')
             expect(page.locator('#polygon-list .polygon-row')).to_have_count(2)
             page.fill('#edit-title','工作台另存版本')
+            page.locator('#module-dialog details').evaluate('(d)=>d.open=true')
             page.fill('#world-height','256');page.locator('#world-height').blur()
             self.assertEqual(page.input_value('#world-width'),'256')
             page.click('#save-module')
